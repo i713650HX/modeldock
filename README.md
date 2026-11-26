@@ -1,7 +1,19 @@
-# ModelLodge — 本地模型管理器 v1.8.0（正式发布版）
+# ModelLodge — 本地模型管理器 v1.9.0（正式发布版）
 
 本地模型管理工具：**模型下载 + 管理 + 全品牌显卡显存判断 + 文件校验 + 完整开源致谢 + 本地崩溃日志**，全中文界面、中文安装向导。
 
+## 界面预览 / Screenshots
+
+**模型库 / Model Library** — 卡片展示量化、架构、上下文、显存适配；支持收藏置顶、模糊搜索、架构筛选
+![模型库](docs/screenshots/01-library.png)
+
+**模型下载 / Download** — 三源搜索、直链下载、精选推荐、并发队列、断点续传
+![下载](docs/screenshots/02-download.png)
+
+**设置 / Settings** — 界面语言、主题、代理、并发数、冲突策略
+![设置](docs/screenshots/03-settings.png)
+
+**v1.9.0：严重 BUG 修复 + 界面截图** — 修复 app.js 致命命名冲突（v1.0~v1.8 所有界面交互失效）；新增三张界面截图；补充仓库 topics。务必升级！
 **v1.8.0：多语言界面 + 中文释义** — 设置里切换 简体中文/English/日本語；CLI 输出中文为主+英文对照，加 --en 切纯英文。
 **v1.7.0：法律合规 + 稳定性修复** — 关于页/ README 加免责与商标声明；CLI 改为安装目录 cli/ 下可直接运行；修复并发取消计数残留。
 **v1.6.0：仪表盘 + 精选推荐 + CLI** — 首页 KPI 扩展、常用模型一点即搜、命令行工具 mldl.js（search/files/get/ls/sources）。
@@ -64,7 +76,7 @@ Llama、Gemma 等 gated 模型需要授权：在 https://huggingface.co/settings
 
 ## 安装
 
-双击 `ModelLodge-Setup-1.8.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
+双击 `ModelLodge-Setup-1.9.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
 桌面和开始菜单生成快捷方式。卸载走控制面板，不删你的标签备注数据。
 
 ## 下载后遇到安全警告怎么办（重要）
@@ -101,7 +113,12 @@ Release 下载：**[Releases](../../releases/latest)**
 
 ## 校验信息
 
-**v1.8.0 正式发布版（当前推荐）**
+**v1.9.0 正式发布版（当前推荐，务必升级）**
+- 文件：`ModelLodge-Setup-1.9.0.exe`
+- 大小：76,218,333 字节（73 MB）
+- SHA256：`290eb570cbc2981f1c99f1cdc887a2d7fab50aa15165a16b5cc2adddc42b798d`
+
+**v1.8.0（存档）**
 - 文件：`ModelLodge-Setup-1.8.0.exe`
 - 大小：76,217,834 字节（73 MB）
 - SHA256：`024126f7bc9131e5fea95cd10ee4d4de838ec98ecc8b735a6db46c6c7a7ee1fd`
