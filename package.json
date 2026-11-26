@@ -1,9 +1,9 @@
 {
-  "name": "model-vault",
-  "version": "2.2.1",
-  "description": "ModelVault 本地模型管理器 — 下载、管理、显存适配与校验",
+  "name": "modeldock",
+  "version": "1.0.0",
+  "description": "ModelDock 本地模型管理器 — 下载、管理、显存适配与校验",
   "main": "main.js",
-  "author": "ModelVault Team",
+  "author": "ModelDock Team",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -11,9 +11,9 @@
     "dist": "electron-builder --win --x64 --publish never"
   },
   "build": {
-    "appId": "com.workbuddy.modelvault",
-    "productName": "ModelVault",
-    "copyright": "Copyright © 2026 ModelVault Team. 保留所有权利。",
+    "appId": "com.workbuddy.modeldock",
+    "productName": "ModelDock",
+    "copyright": "Copyright © 2026 ModelDock Team. 保留所有权利。",
     "directories": {
       "output": "dist"
     },
@@ -52,7 +52,7 @@
         }
       ],
       "icon": "icon.png",
-      "artifactName": "ModelVault-Setup-${version}.${ext}"
+      "artifactName": "ModelDock-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -64,11 +64,11 @@
       "license": "LICENSE.rtf",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ModelVault",
+      "shortcutName": "ModelDock",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "menuCategory": true,
-      "artifactName": "ModelVault-Setup-${version}.${ext}"
+      "artifactName": "ModelDock-Setup-${version}.${ext}"
     }
   },
   "devDependencies": {
