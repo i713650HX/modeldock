@@ -214,6 +214,12 @@
       </div>
 
       <div class="detail-section">
+        <div class="detail-label">快速启动（一键用起来）</div>
+        <div id="runtime-list" style="display:flex;flex-direction:column;gap:6px;margin:8px 0"></div>
+        <div class="cmd-hint" id="runtime-hint">自动检测本机已安装的运行时：Ollama 会自动导入 GGUF 并打开对话窗口；llama.cpp 会启动本地 API 服务（127.0.0.1:8080）；LM Studio 直接打开界面。</div>
+      </div>
+
+      <div class="detail-section">
         <div class="detail-label">加载命令</div>
         <div class="cmd-box">
           <div id="cmd-llamaserver" class="cmd-text"></div>
