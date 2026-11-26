@@ -7,9 +7,30 @@ const logger = require('./logger');
 let mainWindow;
 const APP_VERSION = app.getVersion();
 
+// ---- Footprint optimizations (applied before app is ready) ----
+// This app is a flat list UI: no 3D/canvas, so Chromium's GPU process is pure overhead.
+// Software rendering is plenty fast here and removes one whole child process (~40-50 MB).
+if (process.env.MODELLODGE_GPU !== '1') {
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+  app.commandLine.appendSwitch('disable-software-rasterizer');
+}
+// Trim Chromium background services we never use.
+app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('disable-client-side-phishing-detection');
+app.commandLine.appendSwitch('disable-default-apps');
+app.commandLine.appendSwitch('disable-extensions');
+app.commandLine.appendSwitch('disable-sync');
+app.commandLine.appendSwitch('no-first-run');
+app.commandLine.appendSwitch('disable-features', 'Translate,BackForwardCache,MediaRouter,DialMediaRouteProvider,AcceptCHFrame');
+// Keep background downloads alive without full renderer throttling.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+
 // ---- Crash / error logging (local only, never uploaded) ----
 logger.pruneOldLogs();
 logger.info('=== ModelLodge ' + APP_VERSION + ' starting ===');
+app.on('before-quit', () => { try { logger.flush(); } catch (_) {} });
 
 process.on('uncaughtException', (err) => {
   logger.crash('uncaughtException', err);
@@ -199,6 +220,9 @@ function walkDir(dir, fileList, depth) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name.startsWith('.')) continue;
+      // Skip dirs that never hold model files — avoids walking thousands of
+      // dependency/cache entries when a model root is nested in a dev folder.
+      if (/^(node_modules|__pycache__|\.git|venv|\.venv|site-packages|dist|build|Cache|Code Cache|GPUCache)$/i.test(entry.name)) continue;
       walkDir(full, fileList, depth + 1);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
