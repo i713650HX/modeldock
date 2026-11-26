@@ -68,6 +68,7 @@ const el = {
   settingsTokenStatus: document.getElementById('settings-token-status'),
   settingsProxy: document.getElementById('settings-proxy'),
   settingsConflict: document.getElementById('settings-conflict'),
+  settingsConcurrent: document.getElementById('settings-concurrent'),
   settingsMirrorResult: document.getElementById('settings-mirror-result'),
   settingsResetNotes: document.getElementById('settings-reset-notes'),
   libraryView: document.getElementById('library-view'),
@@ -687,6 +688,8 @@ async function openSettings() {
     el.settingsTokenStatus.textContent = hasToken ? '状态：已保存 Token（留空并保存可清除）' : '状态：未设置';
     el.settingsProxy.value = settings.proxy || '';
     el.settingsConflict.value = settings.conflict || 'skip';
+    el.settingsConcurrent.value = String(settings.concurrent || 2);
+    maxConcurrent = settings.concurrent || 2;
   } catch (e) { /* keep default */ }
   el.settingsModal.classList.remove('hidden');
 }
@@ -695,7 +698,10 @@ document.getElementById('settings-save-network').addEventListener('click', async
   const settings = await api.loadSettings();
   settings.proxy = el.settingsProxy.value.trim();
   settings.conflict = el.settingsConflict.value;
+  settings.concurrent = Number(el.settingsConcurrent.value);
+  maxConcurrent = settings.concurrent;
   const ok = await api.saveSettings(settings);
+  pumpDownloadQueue();
   showToast(ok ? '网络设置已保存（重启后仍生效）' : '保存失败');
 });
 
@@ -989,6 +995,29 @@ function ensureDownloadDir() {
   });
 }
 
+// ---- Concurrent download scheduler (max N parallel) ----
+const downloadQueue = [];        // pending { task, d }
+let runningDownloads = 0;
+let maxConcurrent = 2;           // configurable via settings
+
+function pumpDownloadQueue() {
+  while (runningDownloads < maxConcurrent && downloadQueue.length > 0) {
+    const job = downloadQueue.shift();
+    if (!state.downloads[job.task.id]) continue; // was cancelled while queued
+    runningDownloads++;
+    runDownload(job.task, job.d).finally(() => {
+      runningDownloads--;
+      pumpDownloadQueue();
+    });
+  }
+}
+
+function enqueueDownload(task, d) {
+  downloadQueue.push({ task, d });
+  renderDownloadQueue();
+  pumpDownloadQueue();
+}
+
 async function runDownload(task, d) {
   renderDownloadQueue();
   showToast('开始下载：' + d.name);
@@ -1033,7 +1062,7 @@ async function startDownload(model, file) {
   state.downloads[id] = {
     id, name: file.name, status: 'pending', loaded: 0, total: file.size || 0, speed: 0, task,
   };
-  await runDownload(task, state.downloads[id]);
+  enqueueDownload(task, state.downloads[id]);
 }
 
 // ---- Direct URL download ----
@@ -1053,14 +1082,21 @@ async function startDirectDownload() {
   } catch (e) { /* keep generic name */ }
   const task = { id, url, fileName: name, destDir: dir, kind: 'url' };
   state.downloads[id] = { id, name, status: 'pending', loaded: 0, total: 0, speed: 0, task };
-  await runDownload(task, state.downloads[id]);
+  enqueueDownload(task, state.downloads[id]);
 }
 
 function renderDownloadQueue() {
   const tasks = Object.values(state.downloads);
   const active = tasks.filter((d) => d.status === 'downloading' || d.status === 'pending' || d.status === 'paused').length;
   if (api.reportActiveDownloads) api.reportActiveDownloads(active);
+  persistDownloads();
   el.downloadCount.textContent = tasks.length;
+  const statsEl = document.getElementById('download-stats');
+  if (statsEl) {
+    const done = tasks.filter(d => d.status === 'done').length;
+    const failed = tasks.filter(d => d.status === 'error' || d.status === 'cancelled' || d.status === 'stalled').length;
+    statsEl.textContent = '全部 ' + tasks.length + ' · 进行中 ' + active + ' · 已完成 ' + done + ' · 失败 ' + failed;
+  }
   if (!tasks.length) {
     el.downloadQueue.innerHTML = '<div class="cmd-hint">暂无下载任务</div>';
     return;
@@ -1092,7 +1128,19 @@ function renderDownloadQueue() {
         const act = btn.getAttribute('data-act');
         if (act === 'cancel') await api.downloadCancel(d.id);
         else if (act === 'pause') { await api.downloadPause(d.id); d.status = 'paused'; renderDownloadQueue(); }
-        else if (act === 'resume') { await api.downloadResume(d.id); d.status = 'downloading'; renderDownloadQueue(); }
+        else if (act === 'resume') {
+          if (d.restored || !d.task) {
+            // Restored task has no live main-process controller — start a fresh download (resumes from .part)
+            const newId = (d.task?.kind === 'url' ? 'url-' : 'dl-') + (++state.downloadSeq) + '-' + Date.now();
+            const newTask = { ...d.task, id: newId };
+            const nd = { id: newId, name: d.name, status: 'pending', loaded: d.loaded || 0, total: d.total, speed: 0, task: newTask };
+            state.downloads[newId] = nd;
+            delete state.downloads[d.id];
+            enqueueDownload(newTask, nd);
+          } else {
+            await api.downloadResume(d.id); d.status = 'downloading'; renderDownloadQueue();
+          }
+        }
         else if (act === 'retry') {
           const task = d.task;
           if (!task) { showToast('无法重试：缺少任务信息'); return; }
@@ -1105,7 +1153,7 @@ function renderDownloadQueue() {
           };
           state.downloads[newId] = nd;
           delete state.downloads[d.id];
-          await runDownload(newTask, nd);
+          enqueueDownload(newTask, nd);
         }
       });
     });
@@ -1146,5 +1194,28 @@ api.onDownloadProgress((p) => {
   renderSettingsGpus();
   renderFolders();
   await refreshModels();
+  // Restore unfinished downloads from previous session (as paused, user resumes manually)
+  try {
+    const saved = await api.loadDownloads();
+    if (saved && saved.length) {
+      for (const t of saved) {
+        state.downloads[t.id] = {
+          id: t.id, name: t.name, status: 'paused', loaded: t.loaded || 0,
+          total: t.total || 0, speed: 0, task: t.task, error: t.error || '',
+          restored: true,
+        };
+        state.downloadSeq = Math.max(state.downloadSeq, parseInt(String(t.id).match(/\d+/)?.[0] || '0', 10));
+      }
+    }
+  } catch (e) { /* ignore */ }
   renderDownloadQueue();
 })();
+
+// Debounced persistence of unfinished download tasks
+let saveDownloadsTimer = null;
+function persistDownloads() {
+  if (saveDownloadsTimer) clearTimeout(saveDownloadsTimer);
+  saveDownloadsTimer = setTimeout(() => {
+    try { api.saveDownloads(Object.values(state.downloads)); } catch (e) { /* ignore */ }
+  }, 500);
+}
