@@ -12,6 +12,28 @@
   --selected-bg: #dbe6fa;
 }
 
+/* ---- Dark theme ---- */
+:root[data-theme="dark"] {
+  --bg: #1e1f22;
+  --sidebar-bg: #191a1c;
+  --border: #34363b;
+  --text: #e8e9ec;
+  --text-secondary: #b0b3bb;
+  --text-tertiary: #7e828c;
+  --accent: #5b8cff;
+  --accent-hover: #7aa5ff;
+  --danger: #ff6b5e;
+  --hover-bg: #2a2c30;
+  --selected-bg: #26375c;
+}
+:root[data-theme="dark"] .modal-box,
+:root[data-theme="dark"] .drawer { background: #25262a; }
+:root[data-theme="dark"] .detail-input,
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select {
+  background: #2a2c30; color: var(--text); border-color: var(--border);
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
