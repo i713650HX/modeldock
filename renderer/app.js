@@ -1465,9 +1465,17 @@ ML.onDownloadProgress((p) => {
   applyTheme('light'); // default until saved theme loads
   state.folders = await ML.loadFolders();
   state.notes = await ML.loadNotes();
-  state.gpus = await ML.getGpus();
+  // GPU detection spawns nvidia-smi + PowerShell CIM + WMI (hundreds of ms).
+  // Do NOT block first paint on it: render the UI immediately, fill GPUs in the background.
+  state.gpus = [];
   state.brands = await ML.getBrands();
   renderGpuInfo();
+  ML.getGpus().then((gpus) => {
+    state.gpus = gpus || [];
+    renderGpuInfo();
+    renderSettingsGpus();
+    renderModels(); // re-evaluate VRAM fit badges once GPUs arrive
+  }).catch(() => {});
   const btnRefreshGpu = document.getElementById('btn-refresh-gpu');
   if (btnRefreshGpu) {
     btnRefreshGpu.addEventListener('click', async () => {
