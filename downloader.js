@@ -33,12 +33,49 @@ function authHeaders(token, url) {
 let hfToken = '';
 function setHfToken(token) { hfToken = token || ''; }
 
+// ---- Proxy support (HTTP/HTTPS, e.g. http://127.0.0.1:7890) ----
+// Uses https-proxy-agent (declared production dependency). Agent is attached
+// to every HTTP(S) request so downloads/metadata/search all respect it.
+let proxyUrl = '';
+let HttpsProxyAgent = null;
+function setProxy(url) {
+  proxyUrl = (url || '').trim();
+  if (!proxyUrl) return;
+  try { HttpsProxyAgent = require('https-proxy-agent').HttpsProxyAgent; }
+  catch (e) { HttpsProxyAgent = null; }
+}
+function agentFor(url) {
+  if (!proxyUrl || !HttpsProxyAgent) return undefined;
+  // never proxy localhost
+  try { if (new URL(url).hostname === '127.0.0.1' || new URL(url).hostname === 'localhost') return undefined; }
+  catch (e) { /* ignore */ }
+  return new HttpsProxyAgent(proxyUrl);
+}
+
+// ---- Mirror speed test (HEAD request timing) ----
+async function testMirrorSpeed(sourceKey) {
+  const src = SOURCES[sourceKey] || SOURCES.mirror;
+  const testUrl = src.api + '/api/models?limit=1';
+  const t0 = Date.now();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ms, ok) => { if (done) return; done = true; resolve({ source: sourceKey, ms, ok }); };
+    const lib = testUrl.startsWith('https:') ? https : http;
+    const req = lib.get(testUrl, {
+      headers: { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, testUrl) },
+      agent: agentFor(testUrl),
+    }, (res) => { res.resume(); finish(Date.now() - t0, res.statusCode === 200); });
+    req.on('error', () => finish(Date.now() - t0, false));
+    req.setTimeout(8000, () => { req.destroy(); finish(8000, false); });
+  });
+}
+
 function getJSON(url, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 5) return reject(new Error('too many redirects'));
     const lib = url.startsWith('https:') ? https : http;
     const headers = { 'User-Agent': USER_AGENT, Accept: 'application/json', ...authHeaders(hfToken, url) };
-    const req = lib.get(url, { headers }, (res) => {
+    const req = lib.get(url, { headers, agent: agentFor(url) }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         const next = new URL(res.headers.location, url).toString();
@@ -145,6 +182,7 @@ function requestOnce(url, opts, redirects = 0) {
     const req = lib.request(url, {
       method: opts.method || 'GET',
       headers: opts.headers || {},
+      agent: agentFor(url),
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
@@ -169,7 +207,7 @@ function headContentLength(url, redirects = 0) {
   return new Promise((resolve) => {
     if (redirects > 8) return resolve(null);
     const lib = url.startsWith('https:') ? https : http;
-    const req = lib.request(url, { method: 'HEAD', headers: { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) } }, (res) => {
+    const req = lib.request(url, { method: 'HEAD', headers: { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) }, agent: agentFor(url) }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         const next = new URL(res.headers.location, url).toString();
@@ -203,7 +241,6 @@ function fileNameFromUrl(url) {
 
 async function downloadFile(task, onProgress) {
   const { id, destDir } = task;
-  // two modes: repo mode (repoId+file+sourceKey) or direct URL mode (url)
   let fileName, url;
   if (task.url) {
     url = task.url;
@@ -213,146 +250,162 @@ async function downloadFile(task, onProgress) {
     fileName = file.name;
     url = formatUrl(repoId, file.path, sourceKey);
   }
-  const destPath = path.join(destDir, fileName);
-  const partPath = destPath + '.part'; // never expose incomplete downloads to the scanner
+
+  // Conflict policy: what to do if the final file already exists.
+  // 'overwrite' | 'rename' | 'skip' (default: skip if valid, redownload if corrupt)
+  const conflict = task.conflict || 'skip';
+  const destPath0 = path.join(destDir, fileName);
+  let destPath = destPath0;
+  if (conflict === 'rename' && fs.existsSync(destPath0)) {
+    const ext = path.extname(fileName);
+    const base = path.basename(fileName, ext);
+    let i = 1;
+    do { destPath = path.join(destDir, base + '-' + i + ext); i++; }
+    while (fs.existsSync(destPath));
+    fileName = path.basename(destPath);
+  }
+  const partPath = destPath + '.part';
+
   const ctrl = { cancelled: false, paused: false, pauseResolvers: [], stream: null };
   activeDownloads.set(id, ctrl);
 
-  // If a completed file already exists, verify its size before skipping.
-  // A truncated/corrupt file must be re-downloaded, not silently trusted.
+  // Existing final file: verify size, then honor conflict policy.
   if (fs.existsSync(destPath) && !fs.existsSync(partPath)) {
     const localSize = fs.statSync(destPath).size;
     const remoteSize = await headContentLength(url);
-    if (remoteSize === null || localSize === remoteSize) {
-      onProgress({ id, status: 'done', loaded: localSize, total: localSize, speed: 0 });
-      return { ok: true, path: destPath, skipped: true };
+    const valid = remoteSize === null || localSize === remoteSize;
+    if (valid) {
+      if (conflict === 'overwrite') {
+        try { fs.unlinkSync(destPath); } catch (e) { /* ignore */ }
+      } else {
+        onProgress({ id, status: 'done', loaded: localSize, total: localSize, speed: 0 });
+        return { ok: true, path: destPath, skipped: true };
+      }
+    } else {
+      // corrupt — always replace
+      try { fs.unlinkSync(destPath); } catch (e) { /* ignore */ }
     }
-    // size mismatch — treat as corrupt and re-download
-    try { fs.unlinkSync(destPath); } catch (e) { /* ignore */ }
   }
 
-  // Check existing partial file for resume
-  let startByte = 0;
-  let mode = 'w';
-  if (fs.existsSync(partPath)) {
-    const st = fs.statSync(partPath);
-    if (st.size > 0) {
-      startByte = st.size;
-      mode = 'a';
-    }
-  }
+  const MAX_STALL_RETRIES = 3;
+  const STALL_MS = 8000;
+  let stallRetries = 0;
 
   try {
-    // ensure destination directory exists
     fs.mkdirSync(destDir, { recursive: true });
-    const headers = { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) };
-    if (startByte > 0) headers.Range = 'bytes=' + startByte + '-';
 
-    let res = await requestOnce(url, { headers });
-    // If server ignores Range and returns 200, restart from scratch
-    if (startByte > 0 && res.statusCode === 200) {
-      startByte = 0;
-      mode = 'w';
-    } else if (res.statusCode === 416) {
-      // range not satisfiable — partial file is already complete; finalize it
-      res.resume();
-      fs.renameSync(partPath, destPath);
-      onProgress({ id, status: 'done', loaded: fs.statSync(destPath).size, total: fs.statSync(destPath).size, speed: 0 });
-      return { ok: true, path: destPath };
-    } else if (res.statusCode !== 200 && res.statusCode !== 206) {
-      res.resume();
-      throw new Error('HTTP ' + res.statusCode);
-    }
+    for (let attempt = 0; attempt <= MAX_STALL_RETRIES; attempt++) {
+      if (ctrl.cancelled) return { ok: false, cancelled: true };
 
-    const total = startByte + (parseInt(res.headers['content-length'], 10) || 0);
-    const contentRange = res.headers['content-range'];
-    let totalBytes = total;
-    if (contentRange) {
-      const m = contentRange.match(/\/(\d+)/);
-      if (m) totalBytes = parseInt(m[1], 10);
-    } else if (task.file && task.file.size && task.file.size > 0) {
-      totalBytes = task.file.size;
-    }
+      // Re-check partial size each attempt (resume from where we stopped)
+      let startByte = 0;
+      let mode = 'w';
+      if (fs.existsSync(partPath)) {
+        const st = fs.statSync(partPath);
+        if (st.size > 0) { startByte = st.size; mode = 'a'; }
+      }
 
-    // Guard: partial file larger than the true total means the source changed — restart clean
-    if (startByte > 0 && totalBytes > 0 && startByte >= totalBytes) {
-      startByte = 0;
-      mode = 'w';
-      const res2 = await requestOnce(url, { headers: { 'User-Agent': USER_AGENT } });
-      res.destroy();
-      res = res2;
-      if (res.statusCode !== 200 && res.statusCode !== 206) {
+      const headers = { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) };
+      if (startByte > 0) headers.Range = 'bytes=' + startByte + '-';
+
+      let res = await requestOnce(url, { headers });
+      if (startByte > 0 && res.statusCode === 200) { startByte = 0; mode = 'w'; }
+      else if (res.statusCode === 416) {
+        res.resume();
+        if (fs.existsSync(partPath)) fs.renameSync(partPath, destPath);
+        onProgress({ id, status: 'done', loaded: fs.statSync(destPath).size, total: fs.statSync(destPath).size, speed: 0 });
+        return { ok: true, path: destPath };
+      } else if (res.statusCode !== 200 && res.statusCode !== 206) {
         res.resume();
         throw new Error('HTTP ' + res.statusCode);
       }
-    }
 
-    if (ctrl.cancelled) {
-      res.destroy();
-      return { ok: false, cancelled: true };
-    }
+      const total = startByte + (parseInt(res.headers['content-length'], 10) || 0);
+      const contentRange = res.headers['content-range'];
+      let totalBytes = total;
+      if (contentRange) {
+        const m = contentRange.match(/\/(\d+)/);
+        if (m) totalBytes = parseInt(m[1], 10);
+      } else if (task.file && task.file.size && task.file.size > 0) {
+        totalBytes = task.file.size;
+      }
 
-    const stream = fs.createWriteStream(partPath, { flags: mode });
-    ctrl.stream = res;
-    let loaded = startByte;
-    let lastReport = Date.now();
-    let lastLoaded = startByte;
+      if (startByte > 0 && totalBytes > 0 && startByte >= totalBytes) {
+        startByte = 0; mode = 'w';
+        res.destroy();
+        const res2 = await requestOnce(url, { headers: { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) } });
+        res = res2;
+        if (res.statusCode !== 200 && res.statusCode !== 206) {
+          res.resume(); throw new Error('HTTP ' + res.statusCode);
+        }
+      }
 
-    await new Promise((resolve, reject) => {
-      let settled = false;
-      const fail = (e) => {
-        if (settled) return;
-        settled = true;
-        reject(e);
-      };
-      const done = () => {
-        if (settled) return;
-        settled = true;
-        resolve();
-      };
-      // single reusable drain wait — avoids stacking listeners
-      let drainWaiter = null;
-      stream.on('drain', () => {
-        if (drainWaiter) { const w = drainWaiter; drainWaiter = null; w(); }
-      });
-      const waitDrain = () => new Promise((r) => { drainWaiter = r; });
+      // Stream this attempt. Watchdog rejects with STALL marker on no progress.
+      const attemptResult = await new Promise((resolve) => {
+        let resolved = false;
+        const finish = (kind, extra) => {
+          if (resolved) return;
+          resolved = true;
+          if (watchdog) clearInterval(watchdog);
+          resolve({ kind, ...extra });
+        };
+        const stream = fs.createWriteStream(partPath, { flags: mode });
+        ctrl.stream = res;
+        let loaded = startByte;
+        let lastReport = Date.now();
+        let lastLoaded = startByte;
+        let lastDataAt = Date.now();
+        let drainWaiter = null;
 
-      res.on('data', async (chunk) => {
-        if (ctrl.cancelled) {
+        stream.on('drain', () => { if (drainWaiter) { const w = drainWaiter; drainWaiter = null; w(); } });
+        const waitDrain = () => new Promise((r) => { drainWaiter = r; });
+
+        res.on('data', async (chunk) => {
+          if (ctrl.cancelled) { res.destroy(); stream.destroy(); return finish('cancel'); }
+          lastDataAt = Date.now();
+          if (!stream.write(chunk)) await waitDrain();
+          loaded += chunk.length;
+          const now = Date.now();
+          if (now - lastReport >= 500) {
+            const speed = Math.round((loaded - lastLoaded) / ((now - lastReport) / 1000));
+            onProgress({ id, status: 'downloading', loaded, total: totalBytes, speed, stalled: false });
+            lastReport = now; lastLoaded = loaded;
+          }
+        });
+        res.on('end', () => { stream.end(() => finish('ok', { loaded })); });
+        res.on('error', (e) => { try { stream.destroy(); } catch (_) {} finish('error', { error: e }); });
+        stream.on('error', (e) => finish('error', { error: e }));
+
+        // watchdog: no bytes for STALL_MS => destroy this attempt, mark stalled
+        const watchdog = setInterval(() => {
+          if (ctrl.cancelled) return;
+          if (Date.now() - lastDataAt < STALL_MS) return;
+          onProgress({ id, status: 'stalled', loaded, total: totalBytes, speed: 0, retry: attempt + 1, maxRetries: MAX_STALL_RETRIES });
           res.destroy();
-          stream.destroy();
-          return fail(new Error('cancelled'));
-        }
-        if (!stream.write(chunk)) {
-          await waitDrain();
-        }
-        loaded += chunk.length;
-        const now = Date.now();
-        if (now - lastReport >= 500) {
-          const speed = Math.round((loaded - lastLoaded) / ((now - lastReport) / 1000));
-          onProgress({
-            id, status: 'downloading', loaded, total: totalBytes, speed,
-          });
-          lastReport = now;
-          lastLoaded = loaded;
-        }
+          try { stream.destroy(); } catch (_) {}
+          finish('stall', { loaded });
+        }, 2000);
       });
-      res.on('end', () => { stream.end(done); });
-      res.on('error', (e) => { stream.destroy(); fail(e); });
-      stream.on('error', fail);
-    });
 
-    if (ctrl.cancelled) {
-      return { ok: false, cancelled: true };
+      if (attemptResult.kind === 'cancel') return { ok: false, cancelled: true };
+      if (attemptResult.kind === 'error') throw attemptResult.error;
+      if (attemptResult.kind === 'stall') {
+        stallRetries = attempt + 1;
+        if (stallRetries > MAX_STALL_RETRIES) {
+          onProgress({ id, status: 'stalled', loaded: attemptResult.loaded, total: totalBytes, speed: 0, error: '连接持续停滞，已停止' });
+          return { ok: false, error: 'download stalled after ' + MAX_STALL_RETRIES + ' retries' };
+        }
+        // loop continues: re-open from .part (resume)
+        continue;
+      }
+      // success
+      if (ctrl.cancelled) return { ok: false, cancelled: true };
+      const loadedFinal = attemptResult.loaded;
+      fs.renameSync(partPath, destPath);
+      onProgress({ id, status: 'done', loaded: loadedFinal, total: totalBytes, speed: 0 });
+      return { ok: true, path: destPath };
     }
-    // finalize: rename .part -> final file (atomic on same volume)
-    // stream may not have flushed yet — wait for finish
-    if (!stream.writableFinished) {
-      await new Promise((resolve) => stream.once('finish', resolve));
-    }
-    fs.renameSync(partPath, destPath);
-    onProgress({ id, status: 'done', loaded, total: totalBytes, speed: 0 });
-    return { ok: true, path: destPath };
+    return { ok: false, error: 'download failed' };
   } finally {
     activeDownloads.delete(id);
   }
@@ -395,6 +448,8 @@ function resumeDownload(id) {
 module.exports = {
   SOURCES,
   setHfToken,
+  setProxy,
+  testMirrorSpeed,
   searchModels,
   getModelFiles,
   detectFileType,
