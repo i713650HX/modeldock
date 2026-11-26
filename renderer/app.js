@@ -553,6 +553,52 @@ function buildCommands(m) {
   return { server, ollama };
 }
 
+// ---- Runtime detection / one-click launch ----
+let detectedRuntimes = null;
+async function renderRuntimes(m) {
+  const box = document.getElementById('runtime-list');
+  if (!box) return;
+  if (!detectedRuntimes) {
+    try { detectedRuntimes = await ML.detectRuntimes(); } catch (_) { detectedRuntimes = []; }
+  }
+  const isGGUF = /\.gguf$/i.test(m.name);
+  if (!isGGUF) {
+    box.innerHTML = '<div class="cmd-hint">该格式不能直接用运行时加载，仅 GGUF 支持一键启动。</div>';
+    return;
+  }
+  box.innerHTML = '';
+  detectedRuntimes.forEach(rt => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--hover-bg);border-radius:6px';
+    const status = rt.found
+      ? '<span style="color:#2e9e5b;font-size:11px">● 已安装</span>'
+      : '<span style="color:var(--text-tertiary);font-size:11px">○ 未安装</span>';
+    const label = document.createElement('span');
+    label.style.cssText = 'flex:1;font-size:12px';
+    label.innerHTML = '<b>' + esc(rt.name) + '</b> ' + status;
+    row.appendChild(label);
+    const btn = document.createElement('button');
+    btn.className = 'secondary-btn small-btn';
+    btn.textContent = rt.found ? '一键启动' : '下载';
+    btn.addEventListener('click', async () => {
+      if (!rt.found) {
+        await ML.openExternal(rt.hint);
+        showToast('已在浏览器打开 ' + rt.name + ' 下载页');
+        return;
+      }
+      btn.disabled = true; btn.textContent = '启动中...';
+      const ctx = (m.meta && m.meta.contextLength) || 4096;
+      const r = await ML.launchModel(rt.key, m.path, { ctx, name: m.name.replace(/\.gguf$/i, '').replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() });
+      btn.disabled = false; btn.textContent = '一键启动';
+      if (r.ok) showToast(rt.name + ' 已启动' + (r.imported ? '（已导入为 ' + r.modelName + '）' : '') + ' PID ' + r.pid);
+      else if (r.needsManual) { await ML.copyText(r.command); showToast('需手动执行，命令已复制：' + r.command); }
+      else showToast('启动失败：' + (r.error || '未知错误'));
+    });
+    row.appendChild(btn);
+    box.appendChild(row);
+  });
+}
+
 function openDrawer(filePath) {
   const m = findModel(filePath);
   if (!m) return;
@@ -592,6 +638,8 @@ function openDrawer(filePath) {
 
   // VRAM fit — show assessment for EVERY detected GPU
   renderFitForModel(m);
+
+  renderRuntimes(m); // async, fills the quick-launch section
 
   const cmd = buildCommands(m);
   el.cmdLlamaserver.textContent = cmd.server;
