@@ -155,6 +155,7 @@
               <span>下载任务</span>
               <span id="download-count" class="nav-badge">0</span>
             </div>
+            <div id="download-stats" class="cmd-hint" style="padding:4px 12px">全部 0 · 进行中 0 · 已完成 0 · 失败 0</div>
             <div class="download-dir-bar">
               <span>保存到：</span>
               <span id="download-dir-text" class="download-dir-text">未设置</span>
@@ -291,6 +292,14 @@
           <div class="detail-label" style="margin-top:6px;font-size:12px">代理地址（可选）</div>
           <input id="settings-proxy" type="text" class="detail-input" placeholder="http://127.0.0.1:7890 留空则直连" autocomplete="off" />
           <div class="cmd-hint">支持 HTTP/HTTPS 代理。校园网/公司网下载慢可填代理。</div>
+          <div class="detail-label" style="margin-top:10px;font-size:12px">同时下载数</div>
+          <select id="settings-concurrent" class="detail-input">
+            <option value="1">1 个（最稳）</option>
+            <option value="2" selected>2 个（推荐）</option>
+            <option value="3">3 个</option>
+            <option value="4">4 个（快但占带宽）</option>
+          </select>
+          <div class="cmd-hint">同时进行的下载任务数。网速快可调高。</div>
           <div class="detail-label" style="margin-top:10px;font-size:12px">同名文件冲突策略</div>
           <select id="settings-conflict" class="detail-input">
             <option value="skip">跳过（保留已存在文件）</option>
