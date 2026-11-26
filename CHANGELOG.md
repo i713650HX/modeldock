@@ -8,6 +8,18 @@
 
 ## ModelLodge 正式版
 
+### v1.4.0（2026-11-26）— 多源发现 + 资产库增强
+
+从竞品（柯影模型舱 / NavioRX Harbor / LM Studio）挖来的能力：
+
+- **ModelScope 魔搭源**：源下拉新增 ModelScope，粘贴模型 ID（`ns/name`）直接列出文件并下载；实测可列出 qwen/Qwen2.5-7B-Instruct 的 14 个文件（4 个模型文件）
+- **Revision / 分支指定**：文件列表可输入分支或 commit（HF 默认 main，魔搭默认 master），下载 URL 按指定版本构造，让下载可复现
+- **量化筛选**：文件列表按 Q4_K_M 等量化标签一键筛选
+- **全盘多格式扫描**：从只认 GGUF 扩展到 15+ 格式（SafeTensors/ONNX/PyTorch/TFLite/GGML/CoreML 等），非 GGUF 文件显示格式标签
+- **publisher/repo 结构识别**：按 `publisher/repo/file` 目录结构扫描的模型自动打来源标签
+- **模糊搜索**：支持子序列匹配（`qwen7b` 能搜到 `qwen2.5-7b-instruct`）
+- **SafeTensors 分片完整性预检**：详情页检查分片是否齐全、是否有 index.json
+
 ### v1.3.0（2026-11-26）— 系统托盘 + 任务持久化 + 并发队列
 
 从竞品（NavioRX Harbor / LM Studio）挖来的能力：
