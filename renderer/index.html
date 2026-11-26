@@ -287,6 +287,22 @@
           <button id="settings-save-token" class="primary-btn small-btn">保存 Token</button>
         </div>
         <div class="detail-section">
+          <div class="detail-label">网络与下载</div>
+          <div class="detail-label" style="margin-top:6px;font-size:12px">代理地址（可选）</div>
+          <input id="settings-proxy" type="text" class="detail-input" placeholder="http://127.0.0.1:7890 留空则直连" autocomplete="off" />
+          <div class="cmd-hint">支持 HTTP/HTTPS 代理。校园网/公司网下载慢可填代理。</div>
+          <div class="detail-label" style="margin-top:10px;font-size:12px">同名文件冲突策略</div>
+          <select id="settings-conflict" class="detail-input">
+            <option value="skip">跳过（保留已存在文件）</option>
+            <option value="overwrite">覆盖（重新下载）</option>
+            <option value="rename">自动重命名（加 -1 -2）</option>
+          </select>
+          <div class="detail-label" style="margin-top:10px;font-size:12px">镜像源测速</div>
+          <button id="settings-test-mirror" class="primary-btn small-btn">测试两个源的速度</button>
+          <div id="settings-mirror-result" class="cmd-hint" style="margin-top:4px"></div>
+          <button id="settings-save-network" class="primary-btn small-btn" style="margin-top:8px">保存网络设置</button>
+        </div>
+        <div class="detail-section">
           <div class="detail-label">检测到的显卡</div>
           <div id="settings-gpus" class="settings-gpus"></div>
           <div class="cmd-hint">所有品牌显卡都会列出。核显的显存为共享系统内存，实际可用量取决于内存分配。</div>
