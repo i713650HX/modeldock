@@ -8,6 +8,19 @@
 
 ## ModelLodge 正式版
 
+### v1.6.0（2026-11-26）— 仪表盘 + 精选目录 + CLI
+
+从竞品（柯影模型舱 / LM Studio）挖来的能力：
+
+- **仪表盘统计**：首页 KPI 扩展为模型数 / 总大小 / 文件夹数 / 显卡数 / 格式分布，解析失败数单独提示
+- **精选推荐**：下载页内置常用模型快捷入口（Qwen2.5、Gemma 3、DeepSeek R1、Llama 3.2、Coder 等），一点直接搜索，静态数据无需服务端
+- **命令行工具 `mldl.js`**：与 GUI 共用下载引擎，支持 `search` / `files` / `get` / `ls` / `sources`，实测 `files qwen/Qwen2.5-7B-Instruct ms` 可列出 4 个 safetensors 分片及大小
+- CLI 已打进安装包，安装目录可直接 `node mldl.js`
+
+**评估后跳过的竞品功能（说明理由）**：
+- 多语言 UI + RTL：目标用户为中文圈，全中文界面本身是卖点，投入产出比低
+- 磁盘去重 blob + LRU：内容寻址存储会改变文件组织，与"模型文件可被 LM Studio/Ollama 直接读取"的核心场景冲突
+
 ### v1.5.0（2026-11-26）— UI 个性化 + 文件管理
 
 从竞品（LM Studio / 柯影模型舱 / Harbor）挖来的能力：
