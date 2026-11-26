@@ -33,16 +33,40 @@ function ensureLogFile() {
   return currentPath;
 }
 
+// Buffer writes and flush once per second: appendFileSync on every log line
+// blocks the main thread during heavy downloads. Errors are always flushed immediately.
+let buffer = [];
+let flushTimer = null;
+function flush() {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (!buffer.length) return;
+  const lines = buffer;
+  buffer = [];
+  try {
+    fs.appendFileSync(ensureLogFile(), lines.join(''), 'utf8');
+  } catch (e) { /* swallow — logging must be safe */ }
+}
+function scheduleFlush() {
+  if (!flushTimer) flushTimer = setTimeout(flush, 1000);
+}
+
 function write(level, ...args) {
   try {
-    const p = ensureLogFile();
     const ts = new Date().toISOString();
     const text = args.map((a) => {
       if (a instanceof Error) return (a.stack || a.message || String(a));
       if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
       return String(a);
     }).join(' ');
-    fs.appendFileSync(p, '[' + ts + '] [' + level + '] ' + text + '\n', 'utf8');
+    const line = '[' + ts + '] [' + level + '] ' + text + '\n';
+    // Critical entries go straight to disk; routine info is batched.
+    if (level === 'ERROR' || level === 'CRASH') {
+      buffer.push(line);
+      flush();
+    } else {
+      buffer.push(line);
+      scheduleFlush();
+    }
   } catch (e) { /* swallow — logging must be safe */ }
 }
 
@@ -68,4 +92,5 @@ module.exports = {
   crash: (...a) => write('CRASH', ...a),
   pruneOldLogs,
   getLogDir,
+  flush,
 };
