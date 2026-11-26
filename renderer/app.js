@@ -1,11 +1,11 @@
-const api = window.api;
+const ML = window.api; // renamed from "api" to avoid collision with contextBridge global
 
 // ---- Local error logging (forwarded to main process file, never uploaded) ----
 window.addEventListener('error', (e) => {
-  try { api.log('error', 'window.onerror: ' + (e.message || '') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0)); } catch (_) {}
+  try { ML.log('error', 'window.onerror: ' + (e.message || '') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0)); } catch (_) {}
 });
 window.addEventListener('unhandledrejection', (e) => {
-  try { api.log('error', 'unhandledrejection: ' + String(e.reason && e.reason.message || e.reason)); } catch (_) {}
+  try { ML.log('error', 'unhandledrejection: ' + String(e.reason && e.reason.message || e.reason)); } catch (_) {}
 });
 
 const state = {
@@ -139,7 +139,7 @@ el.libraryView.addEventListener('drop', async (e) => {
   const files = Array.from(e.dataTransfer.files || []);
   const paths = files.map(f => f.path).filter(Boolean);
   if (!paths.length) { showToast('无法获取拖入文件路径'); return; }
-  const r = await api.importDroppedPaths(paths, state.folders);
+  const r = await ML.importDroppedPaths(paths, state.folders);
   if (r && r.ok) {
     if (r.added > 0) {
       state.folders = r.folders;
@@ -163,18 +163,18 @@ function applyTheme(mode) {
 document.getElementById('settings-theme').addEventListener('change', async (e) => {
   const mode = e.target.value;
   applyTheme(mode);
-  const settings = await api.loadSettings();
+  const settings = await ML.loadSettings();
   settings.theme = mode;
-  await api.saveSettings(settings);
+  await ML.saveSettings(settings);
 });
 
 // ---- Language switching ----
 document.getElementById('settings-lang').addEventListener('change', async (e) => {
   const lang = e.target.value;
   applyLanguage(lang);
-  const settings = await api.loadSettings();
+  const settings = await ML.loadSettings();
   settings.lang = lang;
-  await api.saveSettings(settings);
+  await ML.saveSettings(settings);
   // re-render dynamic lists so their generated text follows the new language
   try { renderModels(); renderDownloadQueue(); } catch (_) {}
   showToast(lang === 'zh' ? '界面语言已切换' : lang === 'en' ? 'Language switched to English' : '言語を日本語に切り替えました');
@@ -326,7 +326,7 @@ function renderFolders() {
     item.querySelector('.folder-remove').addEventListener('click', async (e) => {
       e.stopPropagation();
       state.folders.splice(index, 1);
-      await api.saveFolders(state.folders);
+      await ML.saveFolders(state.folders);
       renderFolders();
       await refreshModels();
     });
@@ -525,10 +525,10 @@ function renderModels() {
         }
         try {
           if (action === 'folder') {
-            const ok = await api.showInFolder(p);
+            const ok = await ML.showInFolder(p);
             if (!ok) showToast('文件夹打开失败，路径可能已失效');
           } else {
-            await api.copyText(p);
+            await ML.copyText(p);
             showToast('路径已复制到剪贴板');
           }
         } catch (err) {
@@ -613,7 +613,7 @@ async function refreshModels() {
   el.statusText.textContent = '扫描中...';
   el.btnRefresh.classList.add('spinning');
   try {
-    state.models = await api.scanModels(state.folders);
+    state.models = await ML.scanModels(state.folders);
     renderArchFilters();
     renderQuantOptions();
     renderModels();
@@ -627,11 +627,11 @@ async function refreshModels() {
 }
 
 async function addFolder() {
-  const dir = await api.pickDirectory();
+  const dir = await ML.pickDirectory();
   if (!dir) return;
   if (!state.folders.includes(dir)) {
     state.folders.push(dir);
-    await api.saveFolders(state.folders);
+    await ML.saveFolders(state.folders);
     renderFolders();
   }
   await refreshModels();
@@ -680,7 +680,7 @@ document.getElementById('btn-favorite').addEventListener('click', async () => {
   if (!state.currentModel) return;
   const nm = noteFor(state.currentModel);
   nm.favorite = !nm.favorite;
-  const ok = await api.saveNote(state.currentModel.path, nm);
+  const ok = await ML.saveNote(state.currentModel.path, nm);
   if (ok) {
     state.notes[state.currentModel.path] = nm;
     document.getElementById('btn-favorite').textContent = nm.favorite ? '★ 已收藏' : '☆ 收藏';
@@ -693,16 +693,16 @@ document.getElementById('btn-rename').addEventListener('click', async () => {
   const cur = state.currentModel.name;
   const next = prompt('重命名文件（保留扩展名）：', cur);
   if (!next || next === cur) return;
-  const r = await api.renameModelFile(state.currentModel.path, next);
+  const r = await ML.renameModelFile(state.currentModel.path, next);
   if (r.ok) { showToast('已重命名'); state.currentModel.path = r.path; state.currentModel.name = r.path.split('\\').pop().split('/').pop(); await refreshModels(); }
   else showToast('重命名失败：' + r.error);
 });
 
 document.getElementById('btn-move').addEventListener('click', async () => {
   if (!state.currentModel) return;
-  const dir = await api.pickDirectory();
+  const dir = await ML.pickDirectory();
   if (!dir) return;
-  const r = await api.moveModelFiles([state.currentModel.path], dir);
+  const r = await ML.moveModelFiles([state.currentModel.path], dir);
   if (r.ok && r.moved.length) { showToast('已移动到：' + dir); await refreshModels(); }
   else showToast('移动失败：' + (r.errors?.join('; ') || r.error || '未知错误'));
 });
@@ -711,7 +711,7 @@ document.getElementById('btn-save-note').addEventListener('click', async () => {
   if (!state.currentModel) return;
   const tags = el.detailTags.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
   const note = el.detailNote.value.trim();
-  const ok = await api.saveNote(state.currentModel.path, { tags, note });
+  const ok = await ML.saveNote(state.currentModel.path, { tags, note });
   if (ok) {
     state.notes[state.currentModel.path] = { tags, note };
     showToast('标签和备注已保存');
@@ -726,7 +726,7 @@ document.querySelectorAll('.cmd-copy').forEach((btn) => {
     const target = document.getElementById('cmd-' + btn.getAttribute('data-cmd'));
     const text = target ? target.getAttribute('data-cmd') : '';
     if (!text) return;
-    await api.copyText(text);
+    await ML.copyText(text);
     showToast('命令已复制到剪贴板');
   });
 });
@@ -755,7 +755,7 @@ async function exportCsv() {
       note: nm.note || '',
     };
   });
-  const result = await api.exportCsv(rows);
+  const result = await ML.exportCsv(rows);
   if (result.canceled) return;
   if (result.ok) showToast('清单已导出：' + result.path);
   else showToast('导出失败：' + (result.error || '未知错误'));
@@ -764,7 +764,7 @@ async function exportCsv() {
 // ---- About dialog ----
 async function openAbout() {
   try {
-    const info = await api.getAppInfo();
+    const info = await ML.getAppInfo();
     el.aboutVersion.textContent = '版本 ' + info.version;
     el.aboutDetails.innerHTML = `
       Electron ${esc(info.electron)} · Node ${esc(info.node)} · Chromium ${esc(info.chrome)}<br />
@@ -791,7 +791,7 @@ function renderSettingsFolders() {
     item.innerHTML = `<span title="${esc(f)}">${esc(name)}</span><button data-index="${i}" title="移除">&times;</button>`;
     item.querySelector('button').addEventListener('click', async (e) => {
       state.folders.splice(Number(e.target.getAttribute('data-index')), 1);
-      await api.saveFolders(state.folders);
+      await ML.saveFolders(state.folders);
       renderFolders();
       renderSettingsFolders();
       await refreshModels();
@@ -805,9 +805,9 @@ async function openSettings() {
   renderSettingsGpus();
   renderBrandLegend();
   try {
-    const settings = await api.loadSettings();
+    const settings = await ML.loadSettings();
     if (settings && settings.scanDepth) el.settingsDepth.value = String(settings.scanDepth);
-    const hasToken = await api.hasSecret('hfToken');
+    const hasToken = await ML.hasSecret('hfToken');
     el.settingsHfToken.value = '';
     el.settingsTokenStatus.textContent = hasToken ? '状态：已保存 Token（留空并保存可清除）' : '状态：未设置';
     el.settingsProxy.value = settings.proxy || '';
@@ -830,7 +830,7 @@ async function openSettings() {
 }
 
 document.getElementById('settings-save-cols').addEventListener('click', async () => {
-  const settings = await api.loadSettings();
+  const settings = await ML.loadSettings();
   settings.cols = {
     arch: document.getElementById('col-arch').checked,
     quant: document.getElementById('col-quant').checked,
@@ -838,18 +838,18 @@ document.getElementById('settings-save-cols').addEventListener('click', async ()
     params: document.getElementById('col-params').checked,
   };
   state.cols = settings.cols;
-  await api.saveSettings(settings);
+  await ML.saveSettings(settings);
   renderModels();
   showToast('显示设置已保存');
 });
 
 document.getElementById('settings-save-network').addEventListener('click', async () => {
-  const settings = await api.loadSettings();
+  const settings = await ML.loadSettings();
   settings.proxy = el.settingsProxy.value.trim();
   settings.conflict = el.settingsConflict.value;
   settings.concurrent = Number(el.settingsConcurrent.value);
   maxConcurrent = settings.concurrent;
-  const ok = await api.saveSettings(settings);
+  const ok = await ML.saveSettings(settings);
   pumpDownloadQueue();
   showToast(ok ? '网络设置已保存（重启后仍生效）' : '保存失败');
 });
@@ -858,8 +858,8 @@ document.getElementById('settings-test-mirror').addEventListener('click', async 
   el.settingsMirrorResult.textContent = '测试中...';
   try {
     const [hf, mirror] = await Promise.all([
-      api.testMirrorSpeed('hf'),
-      api.testMirrorSpeed('mirror'),
+      ML.testMirrorSpeed('hf'),
+      ML.testMirrorSpeed('mirror'),
     ]);
     const fmt = (r) => r.ok ? (r.ms + ' ms') : '不可用';
     const faster = (hf.ok && hf.ms <= mirror.ms) ? 'Hugging Face' : (mirror.ok ? '国内镜像' : '无可用源');
@@ -872,7 +872,7 @@ document.getElementById('settings-test-mirror').addEventListener('click', async 
 
 document.getElementById('settings-save-token').addEventListener('click', async () => {
   const val = el.settingsHfToken.value.trim();
-  const ok = await api.setSecret('hfToken', val);
+  const ok = await ML.setSecret('hfToken', val);
   if (ok) {
     el.settingsHfToken.value = '';
     el.settingsTokenStatus.textContent = val ? '状态：已保存（系统加密）' : '状态：已清除';
@@ -884,7 +884,7 @@ document.getElementById('settings-save-token').addEventListener('click', async (
 
 el.settingsDepth.addEventListener('change', async () => {
   const depth = Number(el.settingsDepth.value);
-  const ok = await api.saveSettings({ scanDepth: depth });
+  const ok = await ML.saveSettings({ scanDepth: depth });
   showToast(ok ? '扫描深度已保存，点刷新生效' : '保存失败');
 });
 
@@ -897,7 +897,7 @@ document.getElementById('btn-calc-sha').addEventListener('click', async () => {
   btn.disabled = true;
   el.detailSha.textContent = '正在读取文件，请稍候...';
   try {
-    const r = await api.fileSha256(state.currentModel.path);
+    const r = await ML.fileSha256(state.currentModel.path);
     if (r.ok) {
       el.detailSha.textContent = r.sha256;
       el.detailSha.setAttribute('data-cmd', r.sha256);
@@ -918,7 +918,7 @@ document.getElementById('btn-check-shards').addEventListener('click', async () =
   if (!state.currentModel) return;
   out.textContent = '检查中...';
   try {
-    const r = await api.checkShards(state.currentModel.path);
+    const r = await ML.checkShards(state.currentModel.path);
     if (!r.applicable) {
       out.textContent = r.error ? ('检查失败：' + r.error) : '此文件不是分片格式（如 model-00001-of-00004.safetensors），无需检查。';
     } else if (r.ok) {
@@ -932,7 +932,7 @@ document.getElementById('btn-check-shards').addEventListener('click', async () =
 el.detailSha.addEventListener('click', async () => {
   const text = el.detailSha.getAttribute('data-cmd');
   if (!text) return;
-  await api.copyText(text);
+  await ML.copyText(text);
   showToast('SHA256 已复制');
 });
 
@@ -946,7 +946,7 @@ document.getElementById('direct-url-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') startDirectDownload();
 });
 document.getElementById('btn-pick-download-dir').addEventListener('click', async () => {
-  const dir = await api.pickDownloadDir();
+  const dir = await ML.pickDownloadDir();
   if (dir) {
     state.downloadDir = dir;
     el.downloadDirText.textContent = dir;
@@ -968,7 +968,7 @@ async function openLicenses() {
   licensesModal.classList.remove('hidden');
   licensesContent.textContent = '加载中...';
   try {
-    const r = await api.getLicenses();
+    const r = await ML.getLicenses();
     if (r.ok) licensesContent.textContent = r.text;
     else licensesContent.textContent = '无法读取致谢文件：' + (r.error || '未知错误');
   } catch (err) {
@@ -986,7 +986,7 @@ async function openGuide() {
   guideModal.classList.remove('hidden');
   guideContent.textContent = '加载中...';
   try {
-    const r = await api.getGuide();
+    const r = await ML.getGuide();
     if (r.ok) guideContent.textContent = r.text;
     else guideContent.textContent = '无法读取使用指南：' + (r.error || '未知错误');
   } catch (err) {
@@ -1006,15 +1006,15 @@ licensesModal.addEventListener('click', (e) => {
   if (e.target === licensesModal) licensesModal.classList.add('hidden');
 });
 document.getElementById('license-open-electron').addEventListener('click', async () => {
-  const ok = await api.openLicenseFile('LICENSE.electron.txt');
+  const ok = await ML.openLicenseFile('LICENSE.electron.txt');
   if (!ok) showToast('未找到 Electron 许可证文件');
 });
 document.getElementById('license-open-chromium').addEventListener('click', async () => {
-  const ok = await api.openLicenseFile('LICENSES.chromium.html');
+  const ok = await ML.openLicenseFile('LICENSES.chromium.html');
   if (!ok) showToast('未找到 Chromium 许可证文件');
 });
 document.getElementById('license-open-notices').addEventListener('click', async () => {
-  const ok = await api.openLicenseFile('THIRD_PARTY_NOTICES.md');
+  const ok = await ML.openLicenseFile('THIRD_PARTY_NOTICES.md');
   if (!ok) showToast('未找到完整致谢文件');
 });
 el.settingsClose.addEventListener('click', () => el.settingsModal.classList.add('hidden'));
@@ -1022,10 +1022,10 @@ el.settingsModal.addEventListener('click', (e) => {
   if (e.target === el.settingsModal) el.settingsModal.classList.add('hidden');
 });
 el.settingsAddFolder.addEventListener('click', async () => {
-  const dir = await api.pickDirectory();
+  const dir = await ML.pickDirectory();
   if (dir && !state.folders.includes(dir)) {
     state.folders.push(dir);
-    await api.saveFolders(state.folders);
+    await ML.saveFolders(state.folders);
     renderFolders();
     renderSettingsFolders();
     await refreshModels();
@@ -1035,7 +1035,7 @@ el.settingsAddFolder.addEventListener('click', async () => {
 el.settingsResetNotes.addEventListener('click', async () => {
   if (!window.confirm('确定清空所有标签和备注吗？此操作不可撤销（不会删除模型文件）。')) return;
   for (const p of Object.keys(state.notes)) {
-    await api.saveNote(p, { tags: [], note: '' });
+    await ML.saveNote(p, { tags: [], note: '' });
   }
   state.notes = {};
   renderModels();
@@ -1043,7 +1043,7 @@ el.settingsResetNotes.addEventListener('click', async () => {
 });
 
 // ---- Menu events from main process ----
-api.onMenu((evt) => {
+ML.onMenu((evt) => {
   if (evt === 'menu-add-folder') addFolder();
   else if (evt === 'menu-download') {
     document.querySelector('.nav-item[data-view="download"]').click();
@@ -1099,7 +1099,7 @@ async function doSearch() {
   el.hfHint.classList.remove('hidden');
   el.hfResults.innerHTML = '';
   try {
-    const r = await api.hfSearch(q, source, typeFilter);
+    const r = await ML.hfSearch(q, source, typeFilter);
     if (!r.ok) throw new Error(r.error);
     state.hfModels = r.models;
     state.hfSelected = null;
@@ -1142,7 +1142,7 @@ async function showHfFiles(m, revision) {
   el.hfHint.classList.add('hidden');
   el.hfResults.innerHTML = '<div class="hf-files-wrap"><div class="hf-files-title">加载文件列表...</div></div>';
   try {
-    const r = await api.hfFiles(m.id, m.source, state.hfRevision);
+    const r = await ML.hfFiles(m.id, m.source, state.hfRevision);
     if (!r.ok) throw new Error(r.error);
     const wrap = document.createElement('div');
     wrap.className = 'hf-files-wrap';
@@ -1203,7 +1203,7 @@ async function showHfFiles(m, revision) {
 
 function ensureDownloadDir() {
   if (state.downloadDir) return Promise.resolve(state.downloadDir);
-  return api.pickDownloadDir().then((dir) => {
+  return ML.pickDownloadDir().then((dir) => {
     if (dir) {
       state.downloadDir = dir;
       el.downloadDirText.textContent = dir;
@@ -1240,7 +1240,7 @@ function enqueueDownload(task, d) {
 async function runDownload(task, d) {
   renderDownloadQueue();
   showToast('开始下载：' + d.name);
-  const result = task.url ? await api.downloadUrl(task) : await api.downloadStart(task);
+  const result = task.url ? await ML.downloadUrl(task) : await ML.downloadStart(task);
   const cur = state.downloads[task.id];
   if (!cur) return;
   if (result.ok) {
@@ -1248,10 +1248,10 @@ async function runDownload(task, d) {
     cur.loaded = cur.total || cur.loaded;
     if (result.skipped) showToast('文件已存在，跳过：' + d.name);
     else showToast('下载完成：' + d.name);
-    try { if (document.hidden && api.notifyDownloadDone) api.notifyDownloadDone(d.name); } catch (_) {}
+    try { if (document.hidden && ML.notifyDownloadDone) ML.notifyDownloadDone(d.name); } catch (_) {}
     if (!state.folders.includes(task.destDir)) {
       state.folders.push(task.destDir);
-      await api.saveFolders(state.folders);
+      await ML.saveFolders(state.folders);
       renderFolders();
     }
     await refreshModels();
@@ -1271,7 +1271,7 @@ async function startDownload(model, file) {
   if (!dir) { showToast('请选择下载目录'); return; }
   // check disk space before starting
   if (file.size) {
-    const space = await api.checkDiskSpace(dir, file.size * 1.1); // 10% headroom
+    const space = await ML.checkDiskSpace(dir, file.size * 1.1); // 10% headroom
     if (space.ok && !space.enough) {
       showToast('磁盘空间不足，需要 ' + formatSize(file.size) + '，可用 ' + formatSize(space.free));
       return;
@@ -1308,7 +1308,7 @@ async function startDirectDownload() {
 function renderDownloadQueue() {
   const tasks = Object.values(state.downloads);
   const active = tasks.filter((d) => d.status === 'downloading' || d.status === 'pending' || d.status === 'paused').length;
-  if (api.reportActiveDownloads) api.reportActiveDownloads(active);
+  if (ML.reportActiveDownloads) ML.reportActiveDownloads(active);
   persistDownloads();
   el.downloadCount.textContent = tasks.length;
   const statsEl = document.getElementById('download-stats');
@@ -1347,7 +1347,7 @@ function renderDownloadQueue() {
       btn.addEventListener('click', async () => {
         const act = btn.getAttribute('data-act');
         if (act === 'cancel') {
-          await api.downloadCancel(d.id);
+          await ML.downloadCancel(d.id);
           // Remove from queue and UI regardless of whether a live stream existed,
           // so a queued-but-not-started task cannot leave a stale active count.
           const qi = downloadQueue.findIndex(j => j.task && j.task.id === d.id);
@@ -1355,7 +1355,7 @@ function renderDownloadQueue() {
           d.status = 'cancelled';
           renderDownloadQueue();
         }
-        else if (act === 'pause') { await api.downloadPause(d.id); d.status = 'paused'; renderDownloadQueue(); }
+        else if (act === 'pause') { await ML.downloadPause(d.id); d.status = 'paused'; renderDownloadQueue(); }
         else if (act === 'resume') {
           if (d.restored || !d.task) {
             // Restored task has no live main-process controller — start a fresh download (resumes from .part)
@@ -1366,7 +1366,7 @@ function renderDownloadQueue() {
             delete state.downloads[d.id];
             enqueueDownload(newTask, nd);
           } else {
-            await api.downloadResume(d.id); d.status = 'downloading'; renderDownloadQueue();
+            await ML.downloadResume(d.id); d.status = 'downloading'; renderDownloadQueue();
           }
         }
         else if (act === 'retry') {
@@ -1389,7 +1389,7 @@ function renderDownloadQueue() {
   });
 }
 
-api.onDownloadProgress((p) => {
+ML.onDownloadProgress((p) => {
   const d = state.downloads[p.id];
   if (!d) return;
   if (d.status === 'paused' && p.status === 'downloading') return; // keep paused UI state
@@ -1403,16 +1403,16 @@ api.onDownloadProgress((p) => {
 // ---- Init ----
 (async () => {
   applyTheme('light'); // default until saved theme loads
-  state.folders = await api.loadFolders();
-  state.notes = await api.loadNotes();
-  state.gpus = await api.getGpus();
-  state.brands = await api.getBrands();
+  state.folders = await ML.loadFolders();
+  state.notes = await ML.loadNotes();
+  state.gpus = await ML.getGpus();
+  state.brands = await ML.getBrands();
   renderGpuInfo();
   const btnRefreshGpu = document.getElementById('btn-refresh-gpu');
   if (btnRefreshGpu) {
     btnRefreshGpu.addEventListener('click', async () => {
       btnRefreshGpu.textContent = '检测中';
-      state.gpus = await api.refreshGpus();
+      state.gpus = await ML.refreshGpus();
       renderGpuInfo();
       renderSettingsGpus();
       renderModels();
@@ -1425,7 +1425,7 @@ api.onDownloadProgress((p) => {
   await refreshModels();
   // Restore unfinished downloads from previous session (as paused, user resumes manually)
   try {
-    const saved = await api.loadDownloads();
+    const saved = await ML.loadDownloads();
     if (saved && saved.length) {
       for (const t of saved) {
         state.downloads[t.id] = {
@@ -1445,6 +1445,6 @@ let saveDownloadsTimer = null;
 function persistDownloads() {
   if (saveDownloadsTimer) clearTimeout(saveDownloadsTimer);
   saveDownloadsTimer = setTimeout(() => {
-    try { api.saveDownloads(Object.values(state.downloads)); } catch (e) { /* ignore */ }
+    try { ML.saveDownloads(Object.values(state.downloads)); } catch (e) { /* ignore */ }
   }, 500);
 }
