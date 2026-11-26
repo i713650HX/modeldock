@@ -1,0 +1,78 @@
+{
+  "name": "model-vault",
+  "version": "2.2.1",
+  "description": "ModelVault 本地模型管理器 — 下载、管理、显存适配与校验",
+  "main": "main.js",
+  "author": "ModelVault Team",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win --x64",
+    "dist": "electron-builder --win --x64 --publish never"
+  },
+  "build": {
+    "appId": "com.workbuddy.modelvault",
+    "productName": "ModelVault",
+    "copyright": "Copyright © 2026 ModelVault Team. 保留所有权利。",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "gguf.js",
+      "downloader.js",
+      "vram.js",
+      "brands.js",
+      "logger.js",
+      "renderer/**/*",
+      "icon.png",
+      "THIRD_PARTY_NOTICES.md",
+      "GUIDE.md"
+    ],
+    "extraResources": [
+      {
+        "from": "THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      },
+      {
+        "from": "GUIDE.md",
+        "to": "GUIDE.md"
+      },
+      {
+        "from": "LICENSE.rtf",
+        "to": "LICENSE.rtf"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.png",
+      "artifactName": "ModelVault-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": ["zh_CN", "en_US"],
+      "language": "2052",
+      "license": "LICENSE.rtf",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ModelVault",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "menuCategory": true,
+      "artifactName": "ModelVault-Setup-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "28.3.3",
+    "electron-builder": "24.13.3"
+  }
+}
