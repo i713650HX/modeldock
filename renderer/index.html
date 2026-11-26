@@ -94,6 +94,8 @@
         <div class="stat-item"><span class="stat-num" id="stat-size">0 B</span><span class="stat-label">总大小</span></div>
         <div class="stat-sep"></div>
         <div class="stat-item"><span class="stat-num" id="stat-folders">0</span><span class="stat-label">个文件夹</span></div>
+        <div class="stat-sep"></div>
+        <div class="stat-item" id="stat-parse-wrap" style="display:none"><span class="stat-num" id="stat-parse">0</span><span class="stat-label">解析失败</span></div>
       </div>
 
       <div id="model-list" class="model-list"></div>
@@ -198,6 +200,9 @@
         <div class="detail-label">备注</div>
         <textarea id="detail-note" class="detail-textarea" placeholder="给这个模型写点备注..."></textarea>
         <button id="btn-save-note" class="primary-btn small-btn">保存标签和备注</button>
+        <button id="btn-favorite" class="secondary-btn small-btn" style="margin-left:6px">☆ 收藏</button>
+        <button id="btn-rename" class="secondary-btn small-btn" style="margin-left:6px">重命名</button>
+        <button id="btn-move" class="secondary-btn small-btn" style="margin-left:6px">移动到...</button>
       </div>
 
       <div class="detail-section">
@@ -292,6 +297,20 @@
           <div class="cmd-hint">下载 Llama / Gemma 等受限模型需要 Token。用系统级加密保存在本地，不上传。</div>
           <div id="settings-token-status" class="cmd-hint" style="margin-top:4px"></div>
           <button id="settings-save-token" class="primary-btn small-btn">保存 Token</button>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">外观</div>
+          <select id="settings-theme" class="detail-input">
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+            <option value="system">跟随系统</option>
+          </select>
+          <div class="detail-label" style="margin-top:10px;font-size:12px">卡片显示信息</div>
+          <label class="cmd-hint"><input type="checkbox" id="col-arch" checked /> 架构</label>
+          <label class="cmd-hint"><input type="checkbox" id="col-quant" checked /> 量化</label>
+          <label class="cmd-hint"><input type="checkbox" id="col-ctx" checked /> 上下文</label>
+          <label class="cmd-hint"><input type="checkbox" id="col-params" checked /> 参数量</label>
+          <button id="settings-save-cols" class="primary-btn small-btn" style="margin-top:6px">保存显示设置</button>
         </div>
         <div class="detail-section">
           <div class="detail-label">网络与下载</div>
