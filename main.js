@@ -375,7 +375,7 @@ ipcMain.handle('open-external', async (event, url) => {
 
 // ---- Model downloader (Hugging Face) ----
 const downloader = require('./downloader');
-const { downloadFile, searchModels, getModelFiles, cancelDownload, pauseDownload, resumeDownload } = downloader;
+const { downloadFile, searchModels, getModelFiles, cancelDownload, pauseDownload, resumeDownload, setHfToken } = downloader;
 
 ipcMain.handle('hf-search', async (event, query, source, typeFilter) => {
   try {
@@ -581,3 +581,60 @@ ipcMain.handle('get-guide', async () => {
   }
   return { ok: false, error: 'guide file not found' };
 });
+
+// ---- Encrypted credential storage (Electron safeStorage = Windows DPAPI) ----
+const { safeStorage } = require('electron');
+const secretsPath = path.join(app.getPath('userData'), 'secrets.json');
+let secrets = {};
+try {
+  if (fs.existsSync(secretsPath)) secrets = JSON.parse(fs.readFileSync(secretsPath, 'utf8')) || {};
+} catch (e) { secrets = {}; }
+
+ipcMain.handle('set-secret', async (event, key, value) => {
+  try {
+    if (value && value.trim()) {
+      if (safeStorage.isEncryptionAvailable()) {
+        const buf = safeStorage.encryptString(value.trim());
+        secrets[key] = buf.toString('base64');
+      } else {
+        // fallback: plain (rare on Windows); still local-only
+        secrets[key] = value.trim();
+      }
+    } else {
+      delete secrets[key];
+    }
+    fs.writeFileSync(secretsPath, JSON.stringify(secrets, null, 2), 'utf8');
+    syncHfToken();
+    return true;
+  } catch (err) {
+    logger.error('set-secret failed', err);
+    return false;
+  }
+});
+
+ipcMain.handle('get-secret', async (event, key) => {
+  try {
+    const v = secrets[key];
+    if (!v) return '';
+    if (safeStorage.isEncryptionAvailable()) {
+      return safeStorage.decryptString(Buffer.from(v, 'base64'));
+    }
+    return v;
+  } catch (err) {
+    return '';
+  }
+});
+
+ipcMain.handle('has-secret', async (event, key) => !!secrets[key]);
+
+// Sync HF token into the downloader on startup and whenever it changes.
+function syncHfToken() {
+  try {
+    const v = secrets['hfToken'];
+    if (!v) { setHfToken(''); return; }
+    const token = safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(Buffer.from(v, 'base64')) : v;
+    setHfToken(token);
+  } catch (e) { setHfToken(''); }
+}
+syncHfToken();
