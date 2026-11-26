@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { parseGGUF } = require('./gguf');
@@ -36,21 +36,17 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
-  mainWindow.on('close', async (e) => {
-    if (activeDownloadCount <= 0) return;
-    e.preventDefault();
-    const result = await dialog.showMessageBox(mainWindow, {
-      type: 'warning',
-      buttons: ['仍然退出', '留在这里'],
-      defaultId: 1,
-      cancelId: 1,
-      title: '下载尚未完成',
-      message: '还有 ' + activeDownloadCount + ' 个下载任务正在进行。',
-      detail: '退出会中断下载。已下载的部分会保留，下次可断点续传。',
-    });
-    if (result.response === 0) {
-      activeDownloadCount = 0;
-      mainWindow.destroy();
+  // Minimize to tray while downloads are active; otherwise quit normally.
+  mainWindow.on('close', (e) => {
+    if (trayQuitting) return; // explicit quit from tray menu
+    if (activeDownloadCount > 0) {
+      e.preventDefault();
+      mainWindow.hide();
+      if (tray) tray.setToolTip('ModelLodge - ' + activeDownloadCount + ' 个下载进行中（双击恢复）');
+      if (!trayNotified) {
+        trayNotified = true;
+        logger.info('minimized to tray with ' + activeDownloadCount + ' active downloads');
+      }
     }
   });
 }
@@ -108,23 +104,60 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// ---- System tray ----
+let tray = null;
+let trayQuitting = false;
+let trayNotified = false;
+
+function createTray() {
+  try {
+    // Reuse the app icon for the tray (16px variant if available)
+    const iconPath = path.join(__dirname, 'icon-16.png');
+    let icon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+    if (icon.isEmpty()) icon = nativeImage.createFromPath(path.join(__dirname, 'icon.png'));
+    tray = new Tray(icon);
+    tray.setToolTip('ModelLodge - 本地模型管理器');
+    const ctx = Menu.buildFromTemplate([
+      { label: '打开 ModelLodge', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+      { label: '下载任务', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); mainWindow.webContents.send('menu-download'); } } },
+      { type: 'separator' },
+      { label: '退出', click: () => { trayQuitting = true; app.quit(); } },
+    ]);
+    tray.setContextMenu(ctx);
+    tray.on('double-click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
+  } catch (e) {
+    logger.error('createTray failed', e);
+  }
+}
+
 app.whenReady().then(() => {
   createWindow();
   buildMenu();
+  createTray();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
+    else createWindow();
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // Keep running in tray when downloads are active or tray exists (Windows).
+  if (process.platform === 'darwin') return;
+  if (tray && activeDownloadCount > 0) return; // stay alive for downloads
+  if (trayQuitting) app.quit();
 });
 
 // Confirm before closing while downloads are active (partial files are kept for resume)
 let activeDownloadCount = 0;
 ipcMain.on('download-active-count', (event, count) => {
   activeDownloadCount = count;
+  if (tray) {
+    tray.setToolTip(count > 0
+      ? 'ModelLodge - ' + count + ' 个下载进行中（双击恢复）'
+      : 'ModelLodge - 本地模型管理器');
+  }
+  if (count === 0) trayNotified = false;
 });
 
 // ---- Open folder picker ----
@@ -510,7 +543,7 @@ if (appSettings.scanDepth && appSettings.scanDepth >= 1 && appSettings.scanDepth
   scanDepth = appSettings.scanDepth;
 }
 
-ipcMain.handle('load-settings', async () => ({ scanDepth, proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip' }));
+ipcMain.handle('load-settings', async () => ({ scanDepth, proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip', concurrent: appSettings.concurrent || 2 }));
 
 ipcMain.handle('save-settings', async (event, settings) => {
   try {
@@ -525,6 +558,9 @@ ipcMain.handle('save-settings', async (event, settings) => {
     }
     if (['skip', 'overwrite', 'rename'].includes(settings.conflict)) {
       appSettings.conflict = settings.conflict;
+    }
+    if (settings.concurrent >= 1 && settings.concurrent <= 8) {
+      appSettings.concurrent = settings.concurrent;
     }
     fs.writeFileSync(settingsPath, JSON.stringify(appSettings, null, 2), 'utf8');
     return true;
@@ -656,3 +692,29 @@ function syncHfToken() {
 syncHfToken();
 // Apply saved proxy on startup
 try { setProxy(appSettings.proxy || ''); } catch (e) { /* ignore */ }
+
+// ---- Download task persistence (survive restart) ----
+const downloadsPath = path.join(app.getPath('userData'), 'downloads.json');
+ipcMain.handle('save-downloads', async (event, tasks) => {
+  try {
+    // Only keep non-terminal tasks; strip runtime-only fields.
+    const keep = (tasks || []).filter(t => ['pending', 'downloading', 'paused', 'error', 'stalled'].includes(t.status))
+      .map(t => ({
+        id: t.id, name: t.name, status: t.status === 'downloading' ? 'paused' : t.status,
+        loaded: t.loaded || 0, total: t.total || 0, task: t.task, error: t.error || '',
+        savedAt: Date.now(),
+      }));
+    fs.writeFileSync(downloadsPath, JSON.stringify(keep, null, 2), 'utf8');
+    return true;
+  } catch (e) { logger.error('save-downloads failed', e); return false; }
+});
+
+ipcMain.handle('load-downloads', async () => {
+  try {
+    if (!fs.existsSync(downloadsPath)) return [];
+    const arr = JSON.parse(fs.readFileSync(downloadsPath, 'utf8')) || [];
+    // Drop tasks older than 30 days (stale records)
+    const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+    return arr.filter(t => !t.savedAt || t.savedAt > cutoff);
+  } catch (e) { return []; }
+});
