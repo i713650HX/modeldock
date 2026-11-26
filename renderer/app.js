@@ -335,11 +335,20 @@ function getVisibleModels() {
   }
   if (state.search.trim()) {
     const q = state.search.trim().toLowerCase();
+    // Fuzzy: subsequence match ("qwen7b" matches "qwen2.5-7b-instruct")
+    const fuzzy = (text) => {
+      if (!text) return false;
+      const t = text.toLowerCase();
+      if (t.includes(q)) return true;
+      let qi = 0;
+      for (const ch of t) { if (ch === q[qi]) qi++; if (qi === q.length) return true; }
+      return false;
+    };
     list = list.filter((m) => {
-      if (m.name.toLowerCase().includes(q) || m.path.toLowerCase().includes(q)) return true;
+      if (fuzzy(m.name) || fuzzy(m.path) || fuzzy(m.origin)) return true;
       const nm = noteFor(m);
-      if (nm.note && nm.note.toLowerCase().includes(q)) return true;
-      if (nm.tags && nm.tags.some((t) => t.toLowerCase().includes(q))) return true;
+      if (nm.note && fuzzy(nm.note)) return true;
+      if (nm.tags && nm.tags.some((t) => fuzzy(t))) return true;
       return false;
     });
   }
@@ -389,6 +398,8 @@ function renderModels() {
     const meta = m.meta || {};
     const nm = noteFor(m);
     const badges = [];
+    if (m.origin) badges.push(`<span class="card-tag" title="来自 ${esc(m.origin)}">${esc(m.origin)}</span>`);
+    if (m.type && m.type !== 'GGUF') badges.push(`<span class="card-tag">${esc(m.type)}</span>`);
     if (meta.quantization) badges.push(`<span class="card-tag quant">${esc(meta.quantization)}</span>`);
     if (meta.architecture) badges.push(`<span class="card-tag">${esc(meta.architecture)}</span>`);
     if (meta.contextLength) badges.push(`<span class="card-tag ctx">${Math.round(meta.contextLength / 1024)}K 上下文</span>`);
@@ -480,6 +491,10 @@ function openDrawer(filePath) {
   el.detailPath.textContent = m.path;
   el.detailSha.textContent = '';
   el.detailSha.removeAttribute('data-cmd');
+  const shardsEl = document.getElementById('detail-shards');
+  if (shardsEl) shardsEl.textContent = '';
+  const shardSection = document.getElementById('detail-shard-section');
+  if (shardSection) shardSection.style.display = /\.safetensors$/i.test(m.name) ? '' : 'none';
 
   const cells = [
     ['文件名', m.name],
@@ -764,6 +779,22 @@ document.getElementById('btn-calc-sha').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('btn-check-shards').addEventListener('click', async () => {
+  const out = document.getElementById('detail-shards');
+  if (!state.currentModel) return;
+  out.textContent = '检查中...';
+  try {
+    const r = await api.checkShards(state.currentModel.path);
+    if (!r.applicable) {
+      out.textContent = r.error ? ('检查失败：' + r.error) : '此文件不是分片格式（如 model-00001-of-00004.safetensors），无需检查。';
+    } else if (r.ok) {
+      out.textContent = '分片完整：共 ' + r.total + ' 片，全部存在。' + (r.hasIndex ? ' 已找到 index.json。' : ' 未找到 index.json。');
+    } else {
+      out.textContent = '分片缺失：应有 ' + r.total + ' 片，找到 ' + r.found + ' 片。缺失：' + r.missing.join(', ');
+    }
+  } catch (e) { out.textContent = '检查失败：' + e.message; }
+});
+
 el.detailSha.addEventListener('click', async () => {
   const text = el.detailSha.getAttribute('data-cmd');
   if (!text) return;
@@ -896,6 +927,15 @@ async function doSearch() {
   const q = el.hfSearchInput.value.trim();
   if (!q) { showToast('请输入模型名称'); return; }
   const source = el.hfSourceSelect.value;
+  // ModelScope search API requires auth; accept a repo ID (ns/name) and go straight to its file list.
+  if (source === 'ms') {
+    if (!/^[\w.\-]+\/[\w.\-]+$/.test(q)) {
+      showToast('魔搭源请粘贴模型 ID（格式：命名空间/模型名，如 qwen/Qwen2.5-7B-Instruct）');
+      return;
+    }
+    await showHfFiles({ id: q, name: q.split('/').pop(), source: 'ms' }, 'master');
+    return;
+  }
   const typeFilter = document.getElementById('hf-type-select').value;
   el.hfHint.innerHTML = '<p>搜索中...</p>';
   el.hfHint.classList.remove('hidden');
@@ -938,29 +978,49 @@ function renderHfResults() {
   });
 }
 
-async function showHfFiles(m) {
+async function showHfFiles(m, revision) {
   state.hfSelected = m;
+  state.hfRevision = revision || (m.source === 'ms' ? 'master' : 'main');
   el.hfHint.classList.add('hidden');
   el.hfResults.innerHTML = '<div class="hf-files-wrap"><div class="hf-files-title">加载文件列表...</div></div>';
   try {
-    const r = await api.hfFiles(m.id, m.source);
+    const r = await api.hfFiles(m.id, m.source, state.hfRevision);
     if (!r.ok) throw new Error(r.error);
     const wrap = document.createElement('div');
     wrap.className = 'hf-files-wrap';
+    // Quant filter chips (dynamically from files that carry a quant tag)
+    const quants = [...new Set(r.files.map(f => f.quant).filter(Boolean))];
+    const filterChips = quants.length
+      ? '<div class="cmd-hint" style="margin:6px 0">按量化筛选：' + quants.map(q => `<button class="hf-quant-chip" data-q="${esc(q)}">${esc(q)}</button>`).join(' ') + ' <button class="hf-quant-chip" data-q="">全部</button></div>'
+      : '';
     wrap.innerHTML = `
       <div class="hf-files-title">
         <button class="hf-files-back">返回</button>
         <span>${esc(m.name)} 的文件 (${r.files.length})</span>
       </div>
-      <div class="cmd-hint" style="margin-bottom:10px">模型文件排在前面。点击下载保存到设定目录，下载完自动出现在「全部模型」中。</div>
+      <div class="cmd-hint" style="margin-bottom:6px">分支/版本：<input id="hf-revision-input" class="detail-input" style="width:180px;display:inline-block" value="${esc(state.hfRevision)}" /> <button id="hf-revision-go" class="secondary-btn small-btn">切换</button></div>
+      ${filterChips}
+      <div class="cmd-hint" style="margin-bottom:10px">模型文件排在前面；可按目录/量化筛选。点击下载保存到设定目录。</div>
     `;
     wrap.querySelector('.hf-files-back').addEventListener('click', renderHfResults);
+    wrap.querySelector('#hf-revision-go').addEventListener('click', () => {
+      showHfFiles(m, wrap.querySelector('#hf-revision-input').value.trim());
+    });
+    wrap.querySelectorAll('.hf-quant-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        const q = chip.getAttribute('data-q');
+        wrap.querySelectorAll('.hf-file-row').forEach(row => {
+          row.style.display = (!q || row.getAttribute('data-quant') === q) ? '' : 'none';
+        });
+      });
+    });
     if (!r.files.length) {
       wrap.innerHTML += '<div class="cmd-hint">这个仓库没有可下载的文件。</div>';
     }
     r.files.forEach((f) => {
       const row = document.createElement('div');
       row.className = 'hf-file-row';
+      row.setAttribute('data-quant', f.quant || '');
       const sizeText = f.size ? formatSize(f.size) : '';
       row.innerHTML = `
         <span class="hf-file-name" title="${esc(f.path)}">${esc(f.name)}</span>
@@ -1058,7 +1118,7 @@ async function startDownload(model, file) {
     }
   }
   const id = 'dl-' + (++state.downloadSeq) + '-' + Date.now();
-  const task = { id, repoId: model.id, file, destDir: dir, sourceKey: model.source, kind: 'repo' };
+  const task = { id, repoId: model.id, file, destDir: dir, sourceKey: model.source, kind: 'repo', revision: state.hfRevision || undefined };
   state.downloads[id] = {
     id, name: file.name, status: 'pending', loaded: 0, total: file.size || 0, speed: 0, task,
   };
