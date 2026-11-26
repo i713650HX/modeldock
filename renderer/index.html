@@ -121,6 +121,7 @@
             <select id="hf-source-select">
               <option value="mirror">国内镜像</option>
               <option value="hf">Hugging Face</option>
+              <option value="ms">ModelScope 魔搭</option>
             </select>
           </label>
           <label class="sort-wrap">
@@ -221,6 +222,11 @@
         <div class="detail-label">文件校验 (SHA256)</div>
         <button id="btn-calc-sha" class="secondary-btn">计算 SHA256（大文件需几十秒）</button>
         <div id="detail-sha" class="cmd-text" style="margin-top:8px"></div>
+      </div>
+      <div class="detail-section" id="detail-shard-section">
+        <div class="detail-label">分片完整性检查（SafeTensors）</div>
+        <button id="btn-check-shards" class="secondary-btn">检查分片</button>
+        <div id="detail-shards" class="cmd-text" style="margin-top:8px"></div>
       </div>
     </div>
   </aside>
