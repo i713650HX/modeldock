@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:;" />
+  <title>ModelVault</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="content">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">模型库</div>
+        <button class="nav-item active" data-view="all">
+          <svg viewBox="0 0 24 24" class="nav-icon"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+          <span>全部模型</span>
+          <span id="count-all" class="nav-badge">0</span>
+        </button>
+        <button class="nav-item" data-view="recent">
+          <svg viewBox="0 0 24 24" class="nav-icon"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <span>最近添加</span>
+        </button>
+        <button class="nav-item" data-view="download">
+          <svg viewBox="0 0 24 24" class="nav-icon"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>
+          <span>下载模型</span>
+        </button>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-label">架构</div>
+        <div id="arch-list" class="filter-list"></div>
+      </div>
+
+      <div class="sidebar-section folders-section">
+        <div class="sidebar-label">文件夹</div>
+        <div id="folder-list" class="folder-list"></div>
+        <button id="btn-add-folder" class="add-folder">
+          <svg viewBox="0 0 24 24" class="nav-icon"><path d="M12 5v14M5 12h14"/></svg>
+          <span>添加文件夹</span>
+        </button>
+      </div>
+
+      <div class="gpu-section">
+        <div class="gpu-section-header">
+          <span>显卡</span>
+          <button id="btn-refresh-gpu" title="刷新显卡信息">刷新</button>
+        </div>
+        <div id="gpu-list" class="gpu-list">
+          <div class="gpu-item">检测显卡中...</div>
+        </div>
+      </div>
+      <div class="sidebar-footer">
+        <div id="status-dot" class="status-dot"></div>
+        <span id="status-text">就绪</span>
+      </div>
+    </aside>
+
+    <!-- Main panel -->
+    <section class="main-panel">
+      <!-- Library view -->
+      <div id="library-view" class="view-container">
+      <div class="toolbar">
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" class="search-icon"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          <input id="search-input" type="text" placeholder="搜索名称/路径/备注/标签..." autocomplete="off" />
+        </div>
+        <label class="sort-wrap">
+          <span>排序</span>
+          <select id="sort-select">
+            <option value="name">名称</option>
+            <option value="size">大小</option>
+            <option value="modified">添加时间</option>
+            <option value="context">上下文长度</option>
+          </select>
+        </label>
+        <label class="sort-wrap">
+          <span>量化</span>
+          <select id="quant-select">
+            <option value="">全部</option>
+          </select>
+        </label>
+        <button id="btn-export" class="btn-refresh" title="导出清单 CSV">
+          <svg viewBox="0 0 24 24" class="nav-icon"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>
+        </button>
+        <button id="btn-refresh" class="btn-refresh" title="刷新">
+          <svg viewBox="0 0 24 24" class="nav-icon"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+        </button>
+      </div>
+
+      <div class="stats-bar">
+        <div class="stat-item"><span class="stat-num" id="stat-count">0</span><span class="stat-label">个模型</span></div>
+        <div class="stat-sep"></div>
+        <div class="stat-item"><span class="stat-num" id="stat-size">0 B</span><span class="stat-label">总大小</span></div>
+        <div class="stat-sep"></div>
+        <div class="stat-item"><span class="stat-num" id="stat-folders">0</span><span class="stat-label">个文件夹</span></div>
+      </div>
+
+      <div id="model-list" class="model-list"></div>
+
+      <div id="empty-state" class="empty-state hidden">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24"><path d="M4 7h6l2 2h8v10H4z"/></svg>
+        </div>
+        <h2 id="empty-title">没有找到模型</h2>
+        <p id="empty-desc">添加一个包含 .gguf 模型文件的文件夹即可开始。</p>
+        <button id="btn-empty-add" class="primary-btn">添加文件夹</button>
+      </div>
+      </div><!-- /library-view -->
+
+      <!-- Download view -->
+      <div id="download-view" class="view-container hidden">
+        <div class="toolbar">
+          <div class="search-wrap">
+            <svg viewBox="0 0 24 24" class="search-icon"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+            <input id="hf-search-input" type="text" placeholder="搜索任意模型，如 Qwen2.5、deepseek、llama..." autocomplete="off" />
+          </div>
+          <button id="hf-search-btn" class="primary-btn small-btn">搜索</button>
+          <label class="sort-wrap">
+            <span>源</span>
+            <select id="hf-source-select">
+              <option value="mirror">国内镜像</option>
+              <option value="hf">Hugging Face</option>
+            </select>
+          </label>
+          <label class="sort-wrap">
+            <span>类型</span>
+            <select id="hf-type-select">
+              <option value="">全部</option>
+              <option value="gguf">GGUF</option>
+              <option value="safetensors">SafeTensors</option>
+              <option value="onnx">ONNX</option>
+            </select>
+          </label>
+        </div>
+        <div class="direct-url-bar">
+          <span>直链下载：</span>
+          <input id="direct-url-input" type="text" placeholder="粘贴任意下载链接（任何来源的模型文件都行）..." />
+          <button id="direct-url-btn" class="primary-btn small-btn">下载</button>
+        </div>
+        <div class="download-layout">
+          <div class="download-left">
+            <div id="hf-results" class="model-list"></div>
+            <div id="hf-hint" class="empty-state">
+              <div class="empty-icon">
+                <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></svg>
+              </div>
+              <h2>搜索任意模型</h2>
+              <p>搜索 Hugging Face 全量模型（GGUF / SafeTensors / ONNX 等任意格式），点进去选文件下载。</p>
+              <p style="margin-top:8px">小众模型、其它网站的模型？直接用上面的「直链下载」粘贴链接即可。</p>
+            </div>
+          </div>
+          <div class="download-right">
+            <div class="download-panel-header">
+              <span>下载任务</span>
+              <span id="download-count" class="nav-badge">0</span>
+            </div>
+            <div class="download-dir-bar">
+              <span>保存到：</span>
+              <span id="download-dir-text" class="download-dir-text">未设置</span>
+              <button id="btn-pick-download-dir" class="cmd-copy">更改</button>
+            </div>
+            <div id="download-queue" class="download-queue"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Detail drawer -->
+  <div id="drawer-overlay" class="drawer-overlay hidden"></div>
+  <aside id="drawer" class="drawer hidden">
+    <div class="drawer-header">
+      <h2 id="drawer-title">模型详情</h2>
+      <button id="drawer-close" class="drawer-close" title="关闭">&times;</button>
+    </div>
+    <div class="drawer-body">
+      <div id="drawer-arch-badge" class="drawer-badge"></div>
+
+      <div class="detail-section">
+        <div class="detail-label">元数据</div>
+        <div id="detail-grid" class="detail-grid"></div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">显存适配</div>
+        <div id="detail-fit" class="fit-box"></div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">标签（逗号分隔）</div>
+        <input id="detail-tags" class="detail-input" type="text" placeholder="例如: 中文, 编程, 常用" />
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">备注</div>
+        <textarea id="detail-note" class="detail-textarea" placeholder="给这个模型写点备注..."></textarea>
+        <button id="btn-save-note" class="primary-btn small-btn">保存标签和备注</button>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">加载命令</div>
+        <div class="cmd-box">
+          <div id="cmd-llamaserver" class="cmd-text"></div>
+          <button class="cmd-copy" data-cmd="llamaserver" title="复制">复制</button>
+        </div>
+        <div class="cmd-box">
+          <div id="cmd-ollama" class="cmd-text"></div>
+          <button class="cmd-copy" data-cmd="ollama" title="复制">复制</button>
+        </div>
+        <div class="cmd-hint">llama.cpp / Ollama 导入命令，按你的实际环境调整参数</div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">文件路径</div>
+        <div id="detail-path" class="detail-path"></div>
+      </div>
+
+      <div class="detail-section">
+        <div class="detail-label">文件校验 (SHA256)</div>
+        <button id="btn-calc-sha" class="secondary-btn">计算 SHA256（大文件需几十秒）</button>
+        <div id="detail-sha" class="cmd-text" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- About dialog -->
+  <div id="about-modal" class="modal hidden">
+    <div class="modal-box about-box">
+      <div class="about-logo">MV</div>
+      <h2>ModelVault</h2>
+      <div class="about-subtitle">本地 GGUF 模型管理器</div>
+      <div id="about-version" class="about-version"></div>
+      <div id="about-details" class="about-details"></div>
+      <div class="about-license">本软件为免费软件，基于 Electron 开源技术构建。<br />遵循 MIT 风格许可协议，详见安装包内 LICENSE.rtf。</div>
+      <button id="about-guide" class="secondary-btn" style="margin-bottom:8px">使用指南</button>
+      <button id="about-licenses" class="secondary-btn" style="margin-bottom:8px">开源致谢</button><br />
+      <button id="about-close" class="primary-btn">关闭</button>
+    </div>
+  </div>
+
+  <!-- Third-party licenses dialog -->
+  <div id="licenses-modal" class="modal hidden">
+    <div class="modal-box" style="width:720px">
+      <div class="modal-header">
+        <h2>开源致谢 / Third-Party Notices</h2>
+        <button id="licenses-close" class="drawer-close" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="license-actions">
+          <button id="license-open-electron" class="secondary-btn">Electron 许可证</button>
+          <button id="license-open-chromium" class="secondary-btn">Chromium 许可证</button>
+          <button id="license-open-notices" class="secondary-btn">完整致谢文件</button>
+        </div>
+        <div id="licenses-content" class="licenses-content">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings dialog -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h2>设置</h2>
+        <button id="settings-close" class="drawer-close" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="detail-section">
+          <div class="detail-label">模型文件夹</div>
+          <div id="settings-folders" class="settings-folders"></div>
+          <button id="settings-add-folder" class="primary-btn small-btn">添加文件夹</button>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">扫描深度</div>
+          <select id="settings-depth" class="detail-input">
+            <option value="3">浅（3 层）</option>
+            <option value="6" selected>标准（6 层）</option>
+            <option value="10">深（10 层）</option>
+          </select>
+          <div class="cmd-hint">更深会扫描更多子目录，但速度稍慢。修改后点刷新生效。</div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">检测到的显卡</div>
+          <div id="settings-gpus" class="settings-gpus"></div>
+          <div class="cmd-hint">所有品牌显卡都会列出。核显的显存为共享系统内存，实际可用量取决于内存分配。</div>
+          <div class="detail-label" style="margin-top:12px">支持的品牌（国产 + 国外）</div>
+          <div id="settings-brands" class="brand-legend"></div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">数据管理</div>
+          <button id="settings-reset-notes" class="secondary-btn">清空所有标签和备注</button>
+          <div class="cmd-hint">仅清空标签备注，不会删除模型文件。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- User guide dialog -->
+  <div id="guide-modal" class="modal hidden">
+    <div class="modal-box" style="width:760px">
+      <div class="modal-header">
+        <h2>使用指南 / User Guide</h2>
+        <button id="guide-close" class="drawer-close" title="关闭">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="guide-content" class="licenses-content">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
