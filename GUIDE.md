@@ -1,4 +1,4 @@
-# ModelDock 使用指南
+# ModelLodge 使用指南
 
 ## 快速开始（3 步）
 
@@ -75,7 +75,7 @@
 
 ## 数据存储
 
-所有配置保存在本地 `%APPDATA%\modeldock\`：
+所有配置保存在本地 `%APPDATA%\modellodge\`：
 - `folders.json` — 模型文件夹列表
 - `notes.json` — 标签和备注
 - `meta-cache.json` — GGUF 元数据缓存
@@ -129,4 +129,4 @@ A：详情面板算 SHA256，与模型发布页公布的校验值比对。
 
 ---
 
-ModelDock 团队 · 2026 年 11 月
+ModelLodge 团队 · 2026 年 11 月
