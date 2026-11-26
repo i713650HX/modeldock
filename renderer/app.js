@@ -1206,7 +1206,8 @@ let maxConcurrent = 2;           // configurable via settings
 function pumpDownloadQueue() {
   while (runningDownloads < maxConcurrent && downloadQueue.length > 0) {
     const job = downloadQueue.shift();
-    if (!state.downloads[job.task.id]) continue; // was cancelled while queued
+    // Skip cancelled tasks (record removed, or status flipped to cancelled while queued)
+    if (!state.downloads[job.task.id] || state.downloads[job.task.id].status === 'cancelled') continue;
     runningDownloads++;
     runDownload(job.task, job.d).finally(() => {
       runningDownloads--;
@@ -1330,7 +1331,15 @@ function renderDownloadQueue() {
     item.querySelectorAll('button').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const act = btn.getAttribute('data-act');
-        if (act === 'cancel') await api.downloadCancel(d.id);
+        if (act === 'cancel') {
+          await api.downloadCancel(d.id);
+          // Remove from queue and UI regardless of whether a live stream existed,
+          // so a queued-but-not-started task cannot leave a stale active count.
+          const qi = downloadQueue.findIndex(j => j.task && j.task.id === d.id);
+          if (qi !== -1) downloadQueue.splice(qi, 1);
+          d.status = 'cancelled';
+          renderDownloadQueue();
+        }
         else if (act === 'pause') { await api.downloadPause(d.id); d.status = 'paused'; renderDownloadQueue(); }
         else if (act === 'resume') {
           if (d.restored || !d.task) {
