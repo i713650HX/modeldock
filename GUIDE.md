@@ -103,16 +103,21 @@
 - 已被隔离的，去隔离区恢复文件并添加信任
 - 实在不行临时退出杀软，装完再打开
 
+## 界面语言
+
+设置（Ctrl+,）→「界面语言」可切换 简体中文 / English / 日本語，即时生效。默认简体中文。
+
 ## 命令行工具（mldl.js）
 
 安装目录的 `cli` 文件夹里有 `mldl.js`（例如 `C://Program Files\ModelLodge\cli\`），可与 GUI 共用下载引擎：
 
 ```
-node cli/mldl.js sources                         查看可用源
+node cli/mldl.js sources                         查看可用源（中文为主、英文对照）
 node cli/mldl.js search Qwen2.5 mirror           搜索模型
 node cli/mldl.js files qwen/Qwen2.5-7B-Instruct ms   列出仓库文件
 node cli/mldl.js get <repo> <文件路径> [保存目录] [源]   下载文件
 node cli/mldl.js ls [目录]                       列出本地模型
+在任意命令后加 --en 可切换为纯英文输出，例如：node cli/mldl.js sources --en
 ```
 
 下载页还有「精选推荐」快捷入口，一点即搜常用模型。首页顶部 KPI 显示模型数、总大小、显卡数、格式分布。
