@@ -1057,13 +1057,14 @@ ML.onMenu((evt) => {
 });
 
 // ---- Featured model catalog (static, no server dependency) ----
+// Featured models map directly to ModelScope GGUF repos (domestic-friendly, no search API needed).
 const FEATURED = [
-  { q: 'Qwen2.5 7B Instruct', label: 'Qwen2.5 7B（中文强）' },
-  { q: 'Qwen2.5 14B Instruct', label: 'Qwen2.5 14B' },
-  { q: 'Gemma 3 4B', label: 'Gemma 3 4B（轻量）' },
-  { q: 'DeepSeek R1 Distill 7B', label: 'DeepSeek R1 7B' },
-  { q: 'Llama 3.2 3B Instruct', label: 'Llama 3.2 3B' },
-  { q: 'Qwen2.5 Coder 7B', label: 'Qwen2.5 Coder（代码）' },
+  { label: 'Qwen2.5 7B（中文强）', repo: 'Qwen/Qwen2.5-7B-Instruct-GGUF' },
+  { label: 'Qwen2.5 14B', repo: 'Qwen/Qwen2.5-14B-Instruct-GGUF' },
+  { label: 'Gemma 3 4B（轻量）', repo: 'ggml-org/gemma-3-4b-it-GGUF' },
+  { label: 'DeepSeek R1 7B', repo: 'bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF' },
+  { label: 'Llama 3.2 3B', repo: 'bartowski/Llama-3.2-3B-Instruct-GGUF' },
+  { label: 'Qwen2.5 Coder（代码）', repo: 'Qwen/Qwen2.5-Coder-7B-Instruct-GGUF' },
 ];
 (function renderFeatured() {
   const box = document.getElementById('featured-chips');
@@ -1072,9 +1073,11 @@ const FEATURED = [
     const btn = document.createElement('button');
     btn.className = 'secondary-btn small-btn';
     btn.textContent = item.label;
+    btn.title = '直接从 ModelScope 打开：' + item.repo;
     btn.addEventListener('click', () => {
-      el.hfSearchInput.value = item.q;
-      doSearch();
+      // Open the repo's file list on the domestic ModelScope source directly.
+      el.hfSourceSelect.value = 'ms';
+      showHfFiles({ id: item.repo, name: item.repo.split('/').pop(), source: 'ms' }, 'master');
     });
     box.appendChild(btn);
   });
@@ -1095,20 +1098,29 @@ async function doSearch() {
     return;
   }
   const typeFilter = document.getElementById('hf-type-select').value;
+  // Try the chosen source first, then fall back to the others (mirror/HF are flaky in CN).
+  const order = [source, ...['mirror', 'hf'].filter(s => s !== source)];
   el.hfHint.innerHTML = '<p>' + t('dl.searching') + '</p>';
   el.hfHint.classList.remove('hidden');
   el.hfResults.innerHTML = '';
-  try {
-    const r = await ML.hfSearch(q, source, typeFilter);
-    if (!r.ok) throw new Error(r.error);
-    state.hfModels = r.models;
-    state.hfSelected = null;
-    el.hfHint.classList.add('hidden');
-    renderHfResults();
-  } catch (err) {
-    el.hfHint.innerHTML = `<h2>${t('dl.searchFail')}</h2><p>${esc(err.message || '')}</p>`;
-    el.hfHint.classList.remove('hidden');
+  let lastErr = null;
+  for (const src of order) {
+    try {
+      const r = await ML.hfSearch(q, src, typeFilter);
+      if (!r.ok) throw new Error(r.error);
+      state.hfModels = r.models;
+      state.hfSelected = null;
+      el.hfHint.classList.add('hidden');
+      renderHfResults();
+      if (src !== source) showToast('已自动切换「' + (src === 'mirror' ? '国内镜像' : 'Hugging Face') + '」源完成搜索');
+      return;
+    } catch (err) {
+      lastErr = err;
+      el.hfHint.innerHTML = '<p>' + t('dl.searching') + '（切换备用源 ' + (src === 'mirror' ? '国内镜像' : 'Hugging Face') + '...）</p>';
+    }
   }
+  el.hfHint.innerHTML = `<h2>${t('dl.searchFail')}</h2><p>${esc(lastErr?.message || '')}</p><p style="margin-top:8px;color:var(--text-tertiary)">建议：改用「ModelScope 魔搭」源粘贴模型 ID，或点下方精选推荐（直接走国内源）。</p>`;
+  el.hfHint.classList.remove('hidden');
 }
 
 function renderHfResults() {
@@ -1147,7 +1159,7 @@ async function showHfFiles(m, revision) {
     const wrap = document.createElement('div');
     wrap.className = 'hf-files-wrap';
     // Quant filter chips (dynamically from files that carry a quant tag)
-    const quants = [...new Set(r.files.map(f => f.quant).filter(Boolean))];
+    const quants = [...new Map(r.files.filter(f => f.quant).map(f => [f.quant.toUpperCase().trim(), f.quant.toUpperCase().trim()])).values()];
     const filterChips = quants.length
       ? '<div class="cmd-hint" style="margin:6px 0">按量化筛选：' + quants.map(q => `<button class="hf-quant-chip" data-q="${esc(q)}">${esc(q)}</button>`).join(' ') + ' <button class="hf-quant-chip" data-q="">全部</button></div>'
       : '';
@@ -1168,7 +1180,7 @@ async function showHfFiles(m, revision) {
       chip.addEventListener('click', () => {
         const q = chip.getAttribute('data-q');
         wrap.querySelectorAll('.hf-file-row').forEach(row => {
-          row.style.display = (!q || row.getAttribute('data-quant') === q) ? '' : 'none';
+          row.style.display = (!q || (row.getAttribute('data-quant') || '').toUpperCase() === q) ? '' : 'none';
         });
       });
     });
@@ -1178,7 +1190,7 @@ async function showHfFiles(m, revision) {
     r.files.forEach((f) => {
       const row = document.createElement('div');
       row.className = 'hf-file-row';
-      row.setAttribute('data-quant', f.quant || '');
+      row.setAttribute('data-quant', (f.quant || '').toUpperCase());
       const sizeText = f.size ? formatSize(f.size) : '';
       row.innerHTML = `
         <span class="hf-file-name" title="${esc(f.path)}">${esc(f.name)}</span>
