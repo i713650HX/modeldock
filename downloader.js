@@ -12,7 +12,7 @@ const SOURCES = {
   mirror: { name: 'HF 镜像 (国内)', api: 'https://hf-mirror.com', web: 'https://hf-mirror.com' },
 };
 
-const USER_AGENT = 'ModelDock/1.0 (+local-model-manager)';
+const USER_AGENT = 'ModelLodge/1.0 (+local-model-manager)';
 
 function getJSON(url, redirects = 0) {
   return new Promise((resolve, reject) => {
