@@ -425,6 +425,17 @@ function renderModels() {
   let totalSize = 0;
   list.forEach((m) => totalSize += m.size);
   el.statSize.textContent = formatSize(totalSize);
+  // dashboard extras
+  const gpuEl = document.getElementById('stat-gpus');
+  if (gpuEl) gpuEl.textContent = state.gpus.length;
+  const fmtEl = document.getElementById('stat-formats');
+  if (fmtEl) {
+    const counts = {};
+    state.models.forEach(m => { const t = (m.type || (m.ext ? m.ext.toUpperCase() : 'GGUF')); counts[t] = (counts[t] || 0) + 1; });
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    fmtEl.textContent = top.length ? top.map(([k, v]) => k + ' ' + v).join(' / ') : '-';
+    fmtEl.title = '格式分布：' + Object.entries(counts).map(([k, v]) => k + ': ' + v).join(', ');
+  }
 
   if (list.length === 0) {
     el.modelList.style.display = 'none';
@@ -1029,6 +1040,30 @@ api.onMenu((evt) => {
   else if (evt === 'menu-licenses') openLicenses();
   else if (evt === 'menu-guide') openGuide();
 });
+
+// ---- Featured model catalog (static, no server dependency) ----
+const FEATURED = [
+  { q: 'Qwen2.5 7B Instruct', label: 'Qwen2.5 7B（中文强）' },
+  { q: 'Qwen2.5 14B Instruct', label: 'Qwen2.5 14B' },
+  { q: 'Gemma 3 4B', label: 'Gemma 3 4B（轻量）' },
+  { q: 'DeepSeek R1 Distill 7B', label: 'DeepSeek R1 7B' },
+  { q: 'Llama 3.2 3B Instruct', label: 'Llama 3.2 3B' },
+  { q: 'Qwen2.5 Coder 7B', label: 'Qwen2.5 Coder（代码）' },
+];
+(function renderFeatured() {
+  const box = document.getElementById('featured-chips');
+  if (!box) return;
+  FEATURED.forEach(item => {
+    const btn = document.createElement('button');
+    btn.className = 'secondary-btn small-btn';
+    btn.textContent = item.label;
+    btn.addEventListener('click', () => {
+      el.hfSearchInput.value = item.q;
+      doSearch();
+    });
+    box.appendChild(btn);
+  });
+})();
 
 // ---- Hugging Face downloader UI ----
 async function doSearch() {
