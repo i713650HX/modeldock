@@ -1,6 +1,6 @@
 {
   "name": "modellodge",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "ModelLodge 本地模型管理器 — 下载、管理、显存适配与校验",
   "main": "main.js",
   "author": "ModelLodge Team",
@@ -48,7 +48,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "icon.png",
@@ -59,7 +61,10 @@
       "perMachine": false,
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
-      "installerLanguages": ["zh_CN", "en_US"],
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
       "language": "2052",
       "license": "LICENSE.rtf",
       "createDesktopShortcut": true,
@@ -74,5 +79,8 @@
   "devDependencies": {
     "electron": "28.3.3",
     "electron-builder": "24.13.3"
+  },
+  "dependencies": {
+    "https-proxy-agent": "^5.0.1"
   }
 }
