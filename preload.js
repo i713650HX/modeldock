@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('api', {
   downloadPause: (id) => ipcRenderer.invoke('download-pause', id),
   downloadResume: (id) => ipcRenderer.invoke('download-resume', id),
   pickDownloadDir: () => ipcRenderer.invoke('pick-download-dir'),
+  testMirrorSpeed: (source) => ipcRenderer.invoke('test-mirror-speed', source),
   onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (e, data) => callback(data)),
 
   // menu events from main process
