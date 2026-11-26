@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('api', {
   log: (level, message) => ipcRenderer.send('renderer-log', level, message),
   getLogDir: () => ipcRenderer.invoke('get-log-dir'),
   getGuide: () => ipcRenderer.invoke('get-guide'),
+  setSecret: (key, value) => ipcRenderer.invoke('set-secret', key, value),
+  getSecret: (key) => ipcRenderer.invoke('get-secret', key),
+  hasSecret: (key) => ipcRenderer.invoke('has-secret', key),
 
   // model downloader
   hfSearch: (q, source, typeFilter) => ipcRenderer.invoke('hf-search', q, source, typeFilter),
