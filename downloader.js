@@ -14,11 +14,31 @@ const SOURCES = {
 
 const USER_AGENT = 'ModelLodge/1.0 (+local-model-manager)';
 
+// Auth header helper: only send the token to the configured HF hosts,
+// never forward it to CDN redirects (security).
+function authHeaders(token, url) {
+  const h = {};
+  if (!token) return h;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === 'huggingface.co' || host.endsWith('.huggingface.co') ||
+        host === 'hf-mirror.com' || host.endsWith('.hf-mirror.com')) {
+      h.Authorization = 'Bearer ' + token;
+    }
+  } catch (e) { /* ignore invalid URL */ }
+  return h;
+}
+
+// global token (set by main process from encrypted storage)
+let hfToken = '';
+function setHfToken(token) { hfToken = token || ''; }
+
 function getJSON(url, redirects = 0) {
   return new Promise((resolve, reject) => {
     if (redirects > 5) return reject(new Error('too many redirects'));
     const lib = url.startsWith('https:') ? https : http;
-    const req = lib.get(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' } }, (res) => {
+    const headers = { 'User-Agent': USER_AGENT, Accept: 'application/json', ...authHeaders(hfToken, url) };
+    const req = lib.get(url, { headers }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         const next = new URL(res.headers.location, url).toString();
@@ -129,8 +149,12 @@ function requestOnce(url, opts, redirects = 0) {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         const next = new URL(res.headers.location, url).toString();
-        // drop Range header on redirect if server rejects? keep it — CDN supports it
-        return requestOnce(next, opts, redirects + 1).then(resolve, reject);
+        // Security: strip Authorization when leaving HF hosts (redirect to CDN)
+        const nextOpts = { ...opts, headers: { ...opts.headers } };
+        if (nextOpts.headers.Authorization && !authHeaders(hfToken, next).Authorization) {
+          delete nextOpts.headers.Authorization;
+        }
+        return requestOnce(next, nextOpts, redirects + 1).then(resolve, reject);
       }
       resolve(res);
     });
@@ -145,7 +169,7 @@ function headContentLength(url, redirects = 0) {
   return new Promise((resolve) => {
     if (redirects > 8) return resolve(null);
     const lib = url.startsWith('https:') ? https : http;
-    const req = lib.request(url, { method: 'HEAD', headers: { 'User-Agent': USER_AGENT } }, (res) => {
+    const req = lib.request(url, { method: 'HEAD', headers: { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) } }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         const next = new URL(res.headers.location, url).toString();
@@ -221,7 +245,7 @@ async function downloadFile(task, onProgress) {
   try {
     // ensure destination directory exists
     fs.mkdirSync(destDir, { recursive: true });
-    const headers = { 'User-Agent': USER_AGENT };
+    const headers = { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) };
     if (startByte > 0) headers.Range = 'bytes=' + startByte + '-';
 
     let res = await requestOnce(url, { headers });
@@ -370,6 +394,7 @@ function resumeDownload(id) {
 
 module.exports = {
   SOURCES,
+  setHfToken,
   searchModels,
   getModelFiles,
   detectFileType,
