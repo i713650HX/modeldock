@@ -840,3 +840,94 @@ ipcMain.handle('move-model-files', async (event, filePaths, targetDir) => {
     return { ok: true, moved, errors };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+
+// ---- Runtime detection & one-click model launch ----
+const { spawn, spawnSync } = require('child_process');
+
+function findExecutable(name, extraDirs) {
+  // PATH lookup
+  const pathVar = process.env.PATH || '';
+  const exts = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';') : [''];
+  const dirs = pathVar.split(path.delimiter).concat(extraDirs || []);
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const p = path.join(dir, name + ext);
+      try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch (_) {}
+    }
+  }
+  return null;
+}
+
+ipcMain.handle('detect-runtimes', async () => {
+  const home = app.getPath('home');
+  const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  const out = [];
+  // Ollama
+  const ollama = findExecutable('ollama', [path.join(local, 'Programs', 'Ollama')]);
+  out.push({ key: 'ollama', name: 'Ollama', exe: ollama || '', found: !!ollama, hint: 'https://ollama.com/download' });
+  // llama.cpp (llama-server / llama-cli)
+  const llamaServer = findExecutable('llama-server', [
+    path.join(home, 'llama.cpp', 'build', 'bin', 'Release'),
+    path.join(local, 'Programs', 'llama.cpp'),
+  ]);
+  out.push({ key: 'llamacpp', name: 'llama.cpp', exe: llamaServer || '', found: !!llamaServer, hint: 'https://github.com/ggml-org/llama.cpp' });
+  // LM Studio
+  const lmCandidates = [
+    path.join(local, 'Programs', 'LM Studio', 'LM Studio.exe'),
+    path.join(local, 'LM Studio', 'LM Studio.exe'),
+    'C://Program Files\\LM Studio\\LM Studio.exe',
+  ];
+  const lm = lmCandidates.find(p => { try { return fs.existsSync(p); } catch (_) { return false; } });
+  out.push({ key: 'lmstudio', name: 'LM Studio', exe: lm || '', found: !!lm, hint: 'https://lmstudio.ai/download' });
+  return out;
+});
+
+ipcMain.handle('launch-model', async (event, runtime, modelPath, opts) => {
+  try {
+    if (!fs.existsSync(modelPath)) return { ok: false, error: '模型文件不存在' };
+    let exe, args = [], cwd;
+    const home = app.getPath('home');
+    const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    if (runtime === 'llamacpp') {
+      exe = findExecutable('llama-server', [
+        path.join(home, 'llama.cpp', 'build', 'bin', 'Release'),
+        path.join(local, 'Programs', 'llama.cpp'),
+      ]);
+      if (!exe) return { ok: false, error: '未找到 llama-server' };
+      args = ['-m', modelPath, '--ctx-size', String((opts && opts.ctx) || 4096), '--host', '127.0.0.1', '--port', String((opts && opts.port) || 8080)];
+    } else if (runtime === 'lmstudio') {
+      const cands = [
+        path.join(local, 'Programs', 'LM Studio', 'LM Studio.exe'),
+        path.join(local, 'LM Studio', 'LM Studio.exe'),
+        'C://Program Files\\LM Studio\\LM Studio.exe',
+      ];
+      exe = cands.find(p => { try { return fs.existsSync(p); } catch (_) { return false; } });
+      if (!exe) return { ok: false, error: '未找到 LM Studio' };
+      // LM Studio has no reliable CLI to open a specific GGUF; just launch it.
+      args = [];
+    } else if (runtime === 'ollama') {
+      exe = findExecutable('ollama', [path.join(local, 'Programs', 'Ollama')]);
+      if (!exe) return { ok: false, error: '未找到 Ollama' };
+      // Auto-import GGUF into Ollama: write a temp Modelfile, run `ollama create`, then `ollama run`.
+      const name = String((opts && opts.name) || 'model').replace(/[^a-zA-Z0-9_.-]/g, '-').toLowerCase();
+      const modelfile = path.join(app.getPath('temp'), 'modellodge-' + Date.now() + '.Modelfile');
+      fs.writeFileSync(modelfile, 'FROM ' + modelPath + '\n', 'utf8');
+      try {
+        const r = spawnSync(exe, ['create', name, '-f', modelfile], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+        if (r.status !== 0) return { ok: false, error: 'Ollama 导入失败：' + ((r.stderr || r.stdout || '').slice(0, 200) || '未知错误') };
+      } finally {
+        try { fs.unlinkSync(modelfile); } catch (_) {}
+      }
+      // launch interactive run in a new console window
+      const child = spawn(exe, ['run', name], { detached: true, stdio: 'ignore', windowsHide: false });
+      child.unref();
+      return { ok: true, pid: child.pid, exe, args: ['run', name], imported: true, modelName: name };
+    } else {
+      return { ok: false, error: '未知运行时' };
+    }
+    const child = spawn(exe, args, { cwd, detached: true, stdio: 'ignore', windowsHide: false });
+    child.unref();
+    return { ok: true, pid: child.pid, exe, args };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
