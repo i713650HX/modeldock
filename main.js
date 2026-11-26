@@ -170,8 +170,19 @@ ipcMain.handle('pick-directory', async () => {
   return result.filePaths[0];
 });
 
-// ---- Recursive .gguf scan with metadata parsing ----
+// ---- Recursive model-file scan with metadata parsing ----
 let scanDepth = 6; // configurable via settings
+
+// All model file formats we recognize (15+) for the local asset library.
+const MODEL_EXTS = new Set([
+  '.gguf', '.safetensors', '.bin', '.pt', '.pth', '.onnx', '.ckpt', '.h5',
+  '.pb', '.tflite', '.npz', '.model', '.cbm', '.ggml', '.mlmodel',
+]);
+const MODEL_TYPE_LABEL = {
+  gguf: 'GGUF', safetensors: 'SafeTensors', bin: 'BIN', pt: 'PyTorch', pth: 'PyTorch',
+  onnx: 'ONNX', ckpt: 'Checkpoint', h5: 'Keras', pb: 'TensorFlow', tflite: 'TFLite',
+  npz: 'NumPy', model: 'Model', cbm: 'CatBoost', ggml: 'GGML', mlmodel: 'CoreML',
+};
 
 function walkDir(dir, fileList, depth) {
   if (depth > scanDepth) return;
@@ -187,15 +198,22 @@ function walkDir(dir, fileList, depth) {
       if (entry.name.startsWith('.')) continue;
       walkDir(full, fileList, depth + 1);
     } else if (entry.isFile()) {
-      if (entry.name.toLowerCase().endsWith('.gguf')) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (MODEL_EXTS.has(ext)) {
         try {
           const stat = fs.statSync(full);
+          // Infer publisher/repo from a .../{publisher}/{repo}/file.gguf layout
+          const parts = path.dirname(full).split(path.sep).filter(Boolean);
+          const origin = parts.length >= 2 ? parts.slice(-2).join('/') : '';
           fileList.push({
             name: entry.name,
             path: full,
             size: stat.size,
             modified: stat.mtimeMs,
             dir: path.dirname(full),
+            ext: ext.slice(1),
+            type: MODEL_TYPE_LABEL[ext.slice(1)] || ext.slice(1).toUpperCase(),
+            origin,
           });
         } catch (err) {
           // skip unreadable files
@@ -252,13 +270,17 @@ ipcMain.handle('scan-models', async (event, dirs) => {
   for (const m of models) {
     const key = m.path;
     const cached = metaCache[key];
+    const isGGUF = (m.ext || path.extname(m.path).slice(1).toLowerCase()) === 'gguf';
     if (cached && cached.size === m.size && cached.modified === m.modified) {
       m.meta = cached.meta;
-    } else {
+    } else if (isGGUF) {
       const meta = parseGGUF(m.path);
       m.meta = meta;
       metaCache[key] = { size: m.size, modified: m.modified, meta };
       cacheDirty = true;
+    } else {
+      // Non-GGUF formats: no header metadata, show file type instead
+      m.meta = { ok: false, format: m.type, noHeader: true };
     }
   }
   if (cacheDirty) saveMetaCacheSoon();
@@ -420,9 +442,9 @@ ipcMain.handle('hf-search', async (event, query, source, typeFilter) => {
   }
 });
 
-ipcMain.handle('hf-files', async (event, repoId, source) => {
+ipcMain.handle('hf-files', async (event, repoId, source, revision) => {
   try {
-    const files = await getModelFiles(repoId, source);
+    const files = await getModelFiles(repoId, source, revision);
     return { ok: true, files };
   } catch (err) {
     logger.error('hf-files failed', err);
@@ -717,4 +739,37 @@ ipcMain.handle('load-downloads', async () => {
     const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
     return arr.filter(t => !t.savedAt || t.savedAt > cutoff);
   } catch (e) { return []; }
+});
+
+// ---- Safetensors shard integrity precheck ----
+// Given a model file path, look for a sibling *.index.json and verify all shards exist.
+ipcMain.handle('check-shards', async (event, filePath) => {
+  try {
+    const dir = path.dirname(filePath);
+    const name = path.basename(filePath);
+    // find shard pattern: model-00001-of-00004.safetensors
+    const m = name.match(/^(.*?)(\d+)-of-(\d+)\.safetensors$/i);
+    if (!m) return { applicable: false };
+    const total = parseInt(m[3], 10);
+    const prefix = m[1];
+    const files = fs.readdirSync(dir);
+    const shards = files.filter(f => f.startsWith(prefix) && /\.safetensors$/i.test(f));
+    const missing = [];
+    for (let i = 1; i <= total; i++) {
+      const expected = prefix + String(i).padStart(5, '0') + '-of-' + String(total).padStart(5, '0') + '.safetensors';
+      if (!files.includes(expected)) missing.push(expected);
+    }
+    // look for index json
+    const indexFiles = files.filter(f => f.endsWith('.index.json') || f === 'model.safetensors.index.json');
+    return {
+      applicable: true,
+      total,
+      found: shards.length,
+      missing,
+      hasIndex: indexFiles.length > 0,
+      ok: missing.length === 0,
+    };
+  } catch (e) {
+    return { applicable: false, error: e.message };
+  }
 });
