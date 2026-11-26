@@ -9,7 +9,7 @@ const APP_VERSION = app.getVersion();
 
 // ---- Crash / error logging (local only, never uploaded) ----
 logger.pruneOldLogs();
-logger.info('=== ModelVault ' + APP_VERSION + ' starting ===');
+logger.info('=== ModelDock ' + APP_VERSION + ' starting ===');
 
 process.on('uncaughtException', (err) => {
   logger.crash('uncaughtException', err);
@@ -26,7 +26,7 @@ function createWindow() {
     minHeight: 540,
     frame: true,
     backgroundColor: '#ffffff',
-    title: 'ModelVault - 本地模型管理器',
+    title: 'ModelDock - 本地模型管理器',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -100,7 +100,7 @@ function buildMenu() {
       label: '帮助',
       submenu: [
         { label: '使用指南', accelerator: 'F1', click: () => mainWindow.webContents.send('menu-guide') },
-        { label: '关于 ModelVault', click: () => mainWindow.webContents.send('menu-about') },
+        { label: '关于 ModelDock', click: () => mainWindow.webContents.send('menu-about') },
         { label: '开源致谢', click: () => mainWindow.webContents.send('menu-licenses') },
       ],
     },
@@ -329,7 +329,7 @@ ipcMain.handle('export-csv', async (event, rows) => {
   try {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '导出模型清单',
-      defaultPath: path.join(app.getPath('documents'), 'ModelVault-模型清单.csv'),
+      defaultPath: path.join(app.getPath('documents'), 'ModelDock-模型清单.csv'),
       filters: [
         { name: 'CSV 文件', extensions: ['csv'] },
         { name: '所有文件', extensions: ['*'] },
