@@ -1,6 +1,6 @@
-# ModelVault 第三方开源组件致谢 / Third-Party Notices
+# ModelDock 第三方开源组件致谢 / Third-Party Notices
 
-ModelVault 的诞生站在众多开源项目的肩膀上。以下列出本软件使用、嵌入或依赖的开源组件及其许可证。
+ModelDock 的诞生站在众多开源项目的肩膀上。以下列出本软件使用、嵌入或依赖的开源组件及其许可证。
 感谢所有开发者为开源社区做出的贡献。
 
 ---
@@ -135,8 +135,8 @@ POSSIBILITY OF SUCH DAMAGE.
 ## 五、结语
 
 再次感谢 Electron、Chromium、Node.js 等开源项目团队，以及所有开源模型的创作者。
-没有你们的工作，就没有 ModelVault。
+没有你们的工作，就没有 ModelDock。
 
 如果你发现本致谢清单有遗漏或错误，欢迎反馈更正。
 
-— ModelVault 团队，2026 年 11 月
+— ModelDock 团队，2026 年 11 月
