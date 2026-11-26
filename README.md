@@ -1,8 +1,8 @@
-# ModelDock — 本地模型管理器 v1.0.0（正式发布版）
+# ModelLodge — 本地模型管理器 v1.0.0（正式发布版）
 
 本地模型管理工具：**模型下载 + 管理 + 全品牌显卡显存判断 + 文件校验 + 完整开源致谢 + 本地崩溃日志**，全中文界面、中文安装向导。
 
-> 前身 ModelVault 内部迭代到 v2.2.1 后，因与 Cohere 的企业产品「Model Vault」重名、搜索时易被淹没，正式发布时更名为 **ModelDock**，版本重新从 v1.0.0 起算。
+> 命名沿革：前身 ModelVault 内部迭代到 v2.2.1 后，因与 Cohere 企业产品「Model Vault」重名，且 ModelDock 撞多个同类项目，最终定名 **ModelLodge**（模型小屋），版本从 v1.0.0 起算。
 
 ## 功能一览
 
@@ -24,13 +24,13 @@
 - 一键生成 llama.cpp / Ollama 加载命令；导出 CSV；SHA256 校验
 
 **工程化**
-- 本地崩溃日志（`%APPDATA%\modeldock\logs\`，仅本地不上传）
+- 本地崩溃日志（`%APPDATA%\modellodge\logs\`，仅本地不上传）
 - 应用内使用指南（F1）、开源致谢（帮助菜单）
 - exe 属性中文元数据
 
 ## 安装
 
-双击 `ModelDock-Setup-1.0.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
+双击 `ModelLodge-Setup-1.0.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
 桌面和开始菜单生成快捷方式。卸载走控制面板，不删你的标签备注数据。
 
 ## 下载后遇到安全警告怎么办（重要）
@@ -56,21 +56,21 @@
 
 - 软件不修改已有模型；下载只写入指定目录；`.part` 临时文件仅在下载时存在。
 - 除下载和显卡检测外完全离线，不上传本地数据。
-- 配置在 `%APPDATA%\modeldock\`：folders.json / notes.json / meta-cache.json / settings.json / logs\。
+- 配置在 `%APPDATA%\modellodge\`：folders.json / notes.json / meta-cache.json / settings.json / logs\。
 
 ## GitHub
 
-源码和安装包：**[i713650HX/modeldock](https://github.com/i713650HX/modeldock)**
+源码和安装包：**[i713650HX/modellodge](https://github.com/i713650HX/modellodge)**
 Release 下载：**[Releases](../../releases/latest)**
 
 ## 校验信息
 
 **v1.0.0 正式发布版（当前推荐）**
-- 文件：`ModelDock-Setup-1.0.0.exe`
-- 大小：76,135,319 字节（73 MB）
-- SHA256：`32631c13603326e8b9c0c491b35f163c38ba0f97d764b16203e3335fe9557386`
+- 文件：`ModelLodge-Setup-1.0.0.exe`
+- 大小：76,151,703 字节（73 MB）
+- SHA256：`aef53d123faf4f1bb917e648f4d5f5dd7a6cc247ddfd5a4405fdb8169a200363`
 
-**前身 ModelVault 内部开发版（存档，不建议下载）**
+**前身 ModelVault / ModelDock 内部开发版（存档，不建议下载）**
 - v2.2.1 — 76,135,387 字节 — SHA256 `b9d431555d8fa7236bcd835ae729c79468cb2ca3876b73610338683c42860b84`
 - v2.2.0 — 76,134,611 字节 — SHA256 `923a531d2d68435fd959ec40e24a05aa55ac8b035ad20bad6125f4e8ea83e60e`
 - v2.1.0 — 76,130,187 字节 — SHA256 `1d9a0de2639c16006cb2d0c98e26f63ef2f58846d944ef4af7382bee10519b81`
