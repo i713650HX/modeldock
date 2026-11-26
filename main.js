@@ -130,10 +130,13 @@ function createTray() {
   }
 }
 
+const SCREENSHOT_MODE = process.env.MODELLODGE_SCREENSHOT === '1';
 app.whenReady().then(() => {
-  createWindow();
-  buildMenu();
-  createTray();
+  if (!SCREENSHOT_MODE) {
+    createWindow();
+    buildMenu();
+    createTray();
+  }
 
   app.on('activate', () => {
     if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
