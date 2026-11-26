@@ -1,77 +1,87 @@
-# ModelVault
+# ModelVault — 本地模型管理器 v1.0.0（正式发布版）
 
-**A local AI model manager: download anything, manage everything, know if your GPU can run it.**
+本地模型管理工具：**管理 + 下载 + 全品牌显卡显存判断 + 文件校验 + 完整开源致谢 + 本地崩溃日志**，全中文界面、中文安装向导。
 
-Full Chinese UI. Free and open source. No telemetry, no account, no cloud.
+**当前版本：v1.0.0（正式发布版，就是之前内部迭代到 2.2.1 的完整成品重新编号）**。更早的 v1.0.0（早期半成品）已归档到 `archive/ModelVault-Setup-1.0.0-early.exe`，v1.1.0~v2.2.1 是内部开发版本，都在下方存档列表里。
 
-[Download the latest installer (Windows x64)](../../releases/latest) · [中文文档](#中文说明)
+## 正式版功能一览
 
-## Features
+**全品牌显卡识别 + 显存适配判断**
+- 自动检测所有显卡（NVIDIA/AMD/Intel + 摩尔线程/壁仞/沐曦/海光/景嘉微等国产卡），每张显示品牌中文名和显存
+- 核显标注"共享系统内存"；三路检测并行，精确值优先
+- 按模型体积对每张卡分别判断：🟢显存充足 / 🟡显存稍不足 / 🔴显存完全不足
 
-- **Universal model download** — Search the entire Hugging Face catalog (GGUF / SafeTensors / ONNX / any format), or paste **any direct URL** from any site. Small, niche, uncensored, mainstream — if there's a link, you can download it.
-- **All-brand GPU detection + VRAM fit** — Detects every GPU in your system (NVIDIA / AMD / Intel + Chinese brands: Moore Threads, Biren, MetaX, Hygon, JMG, Enflame...), shows each one's VRAM, and labels every model:
-  - 🟢 显存充足 (fits comfortably)
-  - 🟡 显存稍不足 (tight / needs partial offload)
-  - 🔴 显存完全不足 (won't fit)
-- **Local model management** — Recursive GGUF scan with real metadata parsing (quantization, architecture, context length, parameter count), tags & notes, sorting/filtering, llama.cpp / Ollama command generation, CSV export.
-- **SHA256 checksum** — One-click hash calculation for any local model file.
-- **Robust downloads** — Progress, pause/resume, cancel, retry, disk-space check, `.part` temp files (no corrupt files), corrupt-file auto redetection.
-- **Local crash logs** — Written to `%APPDATA%\model-vault\logs\`, rotated, **never uploaded**.
+**模型下载（不设限）**
+- 搜索 Hugging Face 全量模型（GGUF/SafeTensors/ONNX 等任意格式），小众冷门都能搜
+- 点进模型列出所有文件，带格式/量化标签和显存预判
+- **直链下载**：任何网站的模型，粘贴链接就能下
+- 实时进度、暂停/继续/取消、断点续传、失败重试；默认国内镜像；下完自动入库
+- 下载前查磁盘空间；`.part` 临时文件防损坏；已存在文件用 HEAD 核对大小，损坏自动重下
 
-## Download & install
+**模型管理**
+- 递归扫描 `.gguf`，解析文件头拿真实元数据（量化/架构/上下文/参数量）
+- 架构/量化筛选，多种排序；标签、备注
+- 一键生成 llama.cpp / Ollama 加载命令；导出 CSV；SHA256 校验
 
-Grab `ModelVault-Setup-2.2.1.exe` from [Releases](../../releases/latest). Run it, pick a language, accept the license, choose an install path.
+**工程化**
+- 本地崩溃日志（`%APPDATA%\model-vault\logs\`，仅本地不上传）
+- 应用内使用指南（F1）、开源致谢（帮助菜单）
+- exe 属性中文元数据
 
-> **Note on security warnings**: This project is published by an individual developer **without a commercial code-signing certificate**, so Windows SmartScreen / your browser / antivirus may show a warning. This is expected. See [Safe handling of download warnings](#download-warning) below — a few clicks and you're in. You can (and should) verify the SHA256 yourself before installing.
+## 安装
 
-## Verify the download
+双击 `ModelVault-Setup-1.0.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
+桌面和开始菜单生成快捷方式。卸载走控制面板，不删你的标签备注数据。
 
-```powershell
-Get-FileHash "C:\path\to\ModelVault-Setup-2.2.1.exe" -Algorithm SHA256
-```
+## 下载后遇到安全警告怎么办（重要）
 
-Expected: `b9d431555d8fa7236bcd835ae729c79468cb2ca3876b73610338683c42860b84`
-Expected size: 76,135,387 bytes
-
-## Build from source
-
-Requires Node.js 18+ and npm.
-
-```bash
-npm install
-npm start          # run from source
-npm run dist       # build the Windows NSIS installer into dist/
-```
-
-Uses Electron 28.3.3 and electron-builder 24.13.3. No runtime npm dependencies beyond Electron itself.
-
-## Privacy
-
-Everything runs locally. The only network calls are: model search/download from Hugging Face (or a direct URL you paste) and GPU detection (local system APIs). No telemetry, no analytics, no data upload.
-
-## License
-
-MIT. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled open-source components and their licenses.
-
----
-
-## 中文说明
-
-**ModelVault — 本地模型管理器**：下载不设限、全品牌显卡显存判断、模型管理与校验，全中文界面，免费开源。
-
-- **下载不设限**：搜索 Hugging Face 全量模型（任意格式），或粘贴任意直链，小众冷门通吃
-- **显存判断**：自动识别所有品牌显卡（含国产卡），按模型体积标注"显存充足 / 稍不足 / 完全不足"
-- **管理**：GGUF 元数据解析、标签备注、 llama.cpp / Ollama 命令、CSV 导出、SHA256 校验
-- **隐私**：除下载和显卡检测外完全离线，不上传任何数据
-
-安装：从 [Releases](../../releases/latest) 下载 `ModelVault-Setup-2.2.1.exe`，双击安装。软件内 `帮助 → 使用指南`（F1）有完整教程。
-
-<a name="download-warning"></a>
-### 下载后遇到安全警告怎么办
-
-未签名软件的常见现象，不是病毒：
+本软件**未购买商业代码签名证书**，下载/安装时可能被系统或杀软拦截。这不是病毒——照着点几下即可：
 
 1. **浏览器提示"此文件可能有害"** → 点「更多信息」→「仍要保留」
 2. **SmartScreen 提示"Windows 已保护你的电脑"** → 点「更多信息」→「仍要运行」
 3. **杀软报毒/隔离** → 选「允许/信任/加白名单」；已隔离的去隔离区恢复并加信任
-4. **自己核对**：用上面的 `Get-FileHash` 命令比对 SHA256，一致即未被篡改
+4. **自己核对**：PowerShell 执行 `Get-FileHash "安装包路径" -Algorithm SHA256`，与下方值比对，一致即未被篡改
+
+> 代码签名证书需向 CA 购买（每年数百到数千元），个人自签对公开分发无效。作者把成本省下来用于持续免费更新。企业电脑如禁止未签名软件，请把 SHA256 和本说明发给 IT 申请白名单。
+
+## 快速上手
+
+1. 打开软件，左下角看显卡列表和显存。
+2. 左侧「添加文件夹」(Ctrl+O) 指向模型目录（LM Studio 默认目录自动检测）。
+3. 卡片显示模型信息、显存适配标签；点卡片看详情、写标签备注、算 SHA256、复制加载命令。
+4. 下载模型：左侧「下载模型」(Ctrl+D) → 搜名字 → 点模型 → 点文件「下载」；或直接粘贴直链。
+5. 帮助 → 使用指南（F1）看完整教程；设置 Ctrl+, 管理文件夹、扫描深度、显卡明细。
+
+## 注意事项
+
+- 软件不修改已有模型；下载只写入指定目录；`.part` 临时文件仅在下载时存在。
+- 除下载和显卡检测外完全离线，不上传本地数据。
+- 配置在 `%APPDATA%\model-vault\`：folders.json / notes.json / meta-cache.json / settings.json / logs\。
+
+## GitHub
+
+源码和安装包已发布：**https://github.com/i713650HX/model-vault**
+Release 下载：**https://github.com/i713650HX/model-vault/releases/latest**
+
+## 校验信息
+
+**v1.0.0 正式发布版（当前推荐）**
+- 文件：`ModelVault-Setup-1.0.0.exe`
+- 大小：76,135,394 字节（73 MB）
+- SHA256：`4d883d9df5a4f71b094e286663007fa175d50241250e285d1668161f98f0cf59`
+
+**内部开发版 / 早期版（存档，不建议下载）**
+- v2.2.1 — 76,135,387 字节 — SHA256 `b9d431555d8fa7236bcd835ae729c79468cb2ca3876b73610338683c42860b84`
+- v2.2.0 — 76,134,611 字节 — SHA256 `923a531d2d68435fd959ec40e24a05aa55ac8b035ad20bad6125f4e8ea83e60e`
+- v2.1.0 — 76,130,187 字节 — SHA256 `1d9a0de2639c16006cb2d0c98e26f63ef2f58846d944ef4af7382bee10519b81`
+- v2.0.0 — 76,125,939 字节 — SHA256 `9b4732bcac9f81ac59c0d3a5a971dee453556b94402514c7df0307652ffadb3d`
+- v1.7.0 — 76,124,245 字节 — SHA256 `86ba6d2880502c25145713730dd3fee16439b528efd2e69f3129f079495a9d3d`
+- v1.6.0 — 76,122,581 字节 — SHA256 `45f2a2cfc4205c5007015248db781d93410aded3d9bbd97bc7809e3982abd3f9`
+- v1.5.0 — 76,121,439 字节 — SHA256 `b94cc369a0ff39a5b12ebcd269845ac67a9017a372c71cdba5ced8a355044578`
+- v1.4.0 — 76,118,287 字节 — SHA256 `20cd02a30a47485d0e18f9cca93f5d9e856a2c13c9e7fc377d0cf981363ba228`
+- v1.3.0 — 76,116,936 字节 — SHA256 `f36bd413c526c47c4fcf7b6adc9b901c2198ea332e5de1fda3e7304d7ee95ebe`
+- v1.2.0 — 76,111,194 字节 — SHA256 `1c9fcc011101247bd6088c93f6f3db923cb53f20cfcb4fea39f28e049d9ecd71`
+- v1.1.0 — 76,178,868 字节 — SHA256 `283feb706137afdd1fec311183c083dfee8e38352bcea2bec0863a9c9ddec5d3`
+- v1.0.0 早期半成品 — 76,173,759 字节 — SHA256 `be429ad4f3eab4fe45050d51b4dc6ca0aa9c1f0952a36142aae4d3c6850775e8`（已移至 archive/）
+
+基于 Electron 28.3.3 / electron-builder 24.13.3 构建。
