@@ -74,6 +74,8 @@ Llama、Gemma 等 gated 模型需要授权：在 https://huggingface.co/settings
 源码和安装包：**[i713650HX/modellodge](https://github.com/i713650HX/modellodge)**
 Release 下载：**[Releases](../../releases/latest)**
 
+每个版本的更新说明见 [CHANGELOG.md](CHANGELOG.md)。所有历史版本安装包均保留在本地归档目录及 GitHub Releases。
+
 ## 校验信息
 
 **v1.2.0 正式发布版（当前推荐）**
