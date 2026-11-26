@@ -168,6 +168,18 @@ document.getElementById('settings-theme').addEventListener('change', async (e) =
   await api.saveSettings(settings);
 });
 
+// ---- Language switching ----
+document.getElementById('settings-lang').addEventListener('change', async (e) => {
+  const lang = e.target.value;
+  applyLanguage(lang);
+  const settings = await api.loadSettings();
+  settings.lang = lang;
+  await api.saveSettings(settings);
+  // re-render dynamic lists so their generated text follows the new language
+  try { renderModels(); renderDownloadQueue(); } catch (_) {}
+  showToast(lang === 'zh' ? '界面语言已切换' : lang === 'en' ? 'Language switched to English' : '言語を日本語に切り替えました');
+});
+
 function showToast(msg) {
   el.toast.textContent = msg;
   el.toast.classList.add('show');
@@ -441,11 +453,11 @@ function renderModels() {
     el.modelList.style.display = 'none';
     el.emptyState.classList.remove('hidden');
     if (state.models.length === 0) {
-      el.emptyTitle.textContent = '没有找到模型';
-      el.emptyDesc.textContent = '添加一个包含 .gguf 模型文件的文件夹即可开始。';
+      el.emptyTitle.textContent = t('empty.noModels');
+      el.emptyDesc.textContent = t('empty.noModelsDesc');
     } else {
-      el.emptyTitle.textContent = '没有匹配的模型';
-      el.emptyDesc.textContent = '换个关键词、架构或量化方式试试。';
+      el.emptyTitle.textContent = t('empty.noMatch');
+      el.emptyDesc.textContent = t('empty.noMatchDesc');
     }
     return;
   }
@@ -805,6 +817,9 @@ async function openSettings() {
     const theme = settings.theme || 'light';
     document.getElementById('settings-theme').value = theme;
     applyTheme(theme);
+    const lang = settings.lang || 'zh';
+    document.getElementById('settings-lang').value = lang;
+    applyLanguage(lang);
     state.cols = settings.cols || state.cols;
     document.getElementById('col-arch').checked = state.cols.arch !== false;
     document.getElementById('col-quant').checked = state.cols.quant !== false;
@@ -1080,7 +1095,7 @@ async function doSearch() {
     return;
   }
   const typeFilter = document.getElementById('hf-type-select').value;
-  el.hfHint.innerHTML = '<p>搜索中...</p>';
+  el.hfHint.innerHTML = '<p>' + t('dl.searching') + '</p>';
   el.hfHint.classList.remove('hidden');
   el.hfResults.innerHTML = '';
   try {
@@ -1091,7 +1106,7 @@ async function doSearch() {
     el.hfHint.classList.add('hidden');
     renderHfResults();
   } catch (err) {
-    el.hfHint.innerHTML = `<h2>搜索失败</h2><p>${esc(err.message || '请检查网络或切换数据源')}</p>`;
+    el.hfHint.innerHTML = `<h2>${t('dl.searchFail')}</h2><p>${esc(err.message || '')}</p>`;
     el.hfHint.classList.remove('hidden');
   }
 }
@@ -1099,7 +1114,7 @@ async function doSearch() {
 function renderHfResults() {
   el.hfResults.innerHTML = '';
   if (!state.hfModels.length) {
-    el.hfHint.innerHTML = '<h2>没有找到模型</h2><p>换个关键词试试。</p>';
+    el.hfHint.innerHTML = '<h2>' + t('dl.noResult') + '</h2><p>' + t('dl.noResultHint') + '</p>';
     el.hfHint.classList.remove('hidden');
     return;
   }
