@@ -280,6 +280,13 @@
           <div class="cmd-hint">更深会扫描更多子目录，但速度稍慢。修改后点刷新生效。</div>
         </div>
         <div class="detail-section">
+          <div class="detail-label">Hugging Face Token（可选）</div>
+          <input id="settings-hf-token" type="password" class="detail-input" placeholder="hf_... 留空则不认证" autocomplete="off" />
+          <div class="cmd-hint">下载 Llama / Gemma 等受限模型需要 Token。用系统级加密保存在本地，不上传。</div>
+          <div id="settings-token-status" class="cmd-hint" style="margin-top:4px"></div>
+          <button id="settings-save-token" class="primary-btn small-btn">保存 Token</button>
+        </div>
+        <div class="detail-section">
           <div class="detail-label">检测到的显卡</div>
           <div id="settings-gpus" class="settings-gpus"></div>
           <div class="cmd-hint">所有品牌显卡都会列出。核显的显存为共享系统内存，实际可用量取决于内存分配。</div>
