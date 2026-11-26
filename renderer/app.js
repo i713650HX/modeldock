@@ -26,6 +26,7 @@ const state = {
   downloadSeq: 0,
   gpus: [],
   brands: [],
+  cols: { arch: true, quant: true, ctx: true, params: true },
 };
 
 const el = {
@@ -129,6 +130,44 @@ function esc(s) {
 }
 
 let toastTimer = null;
+// ---- Drag & drop: drop model files/folders onto the library to add their folders ----
+['dragenter', 'dragover'].forEach((evt) => {
+  el.libraryView.addEventListener(evt, (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+});
+el.libraryView.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  const files = Array.from(e.dataTransfer.files || []);
+  const paths = files.map(f => f.path).filter(Boolean);
+  if (!paths.length) { showToast('无法获取拖入文件路径'); return; }
+  const r = await api.importDroppedPaths(paths, state.folders);
+  if (r && r.ok) {
+    if (r.added > 0) {
+      state.folders = r.folders;
+      renderFolders();
+      await refreshModels();
+      showToast('已导入 ' + r.added + ' 个文件夹');
+    } else {
+      showToast('这些文件夹已在库中');
+    }
+  } else {
+    showToast('导入失败：' + (r.error || '未知错误'));
+  }
+});
+
+// ---- Theme (light / dark / system) ----
+function applyTheme(mode) {
+  const dark = mode === 'dark' || (mode === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+}
+
+document.getElementById('settings-theme').addEventListener('change', async (e) => {
+  const mode = e.target.value;
+  applyTheme(mode);
+  const settings = await api.loadSettings();
+  settings.theme = mode;
+  await api.saveSettings(settings);
+});
+
 function showToast(msg) {
   el.toast.textContent = msg;
   el.toast.classList.add('show');
@@ -352,13 +391,15 @@ function getVisibleModels() {
       return false;
     });
   }
+  // favorites always pinned to the top; secondary sort by chosen field
+  const favFirst = (a, b) => (noteFor(b).favorite ? 1 : 0) - (noteFor(a).favorite ? 1 : 0);
   switch (state.sort) {
-    case 'size': list.sort((a, b) => b.size - a.size); break;
-    case 'modified': list.sort((a, b) => b.modified - a.modified); break;
+    case 'size': list.sort((a, b) => favFirst(a, b) || b.size - a.size); break;
+    case 'modified': list.sort((a, b) => favFirst(a, b) || b.modified - a.modified); break;
     case 'context':
-      list.sort((a, b) => ((b.meta && b.meta.contextLength) || 0) - ((a.meta && a.meta.contextLength) || 0));
+      list.sort((a, b) => favFirst(a, b) || ((b.meta && b.meta.contextLength) || 0) - ((a.meta && a.meta.contextLength) || 0));
       break;
-    default: list.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    default: list.sort((a, b) => favFirst(a, b) || a.name.localeCompare(b.name, undefined, { numeric: true }));
   }
   if (state.view === 'recent') {
     const byDate = [...list].sort((a, b) => b.modified - a.modified);
@@ -372,6 +413,14 @@ function renderModels() {
   const list = getVisibleModels();
   el.statCount.textContent = list.length;
   el.countAll.textContent = state.models.length;
+  // parse-failure status button (GGUF header parse errors only)
+  const parseFails = state.models.filter(m => m.meta && m.meta.ok === false && !m.meta.noHeader).length;
+  const pw = document.getElementById('stat-parse-wrap');
+  if (pw) {
+    pw.style.display = parseFails > 0 ? '' : 'none';
+    document.getElementById('stat-parse').textContent = parseFails;
+    pw.title = parseFails + ' 个 GGUF 文件解析失败（点此筛选）';
+  }
 
   let totalSize = 0;
   list.forEach((m) => totalSize += m.size);
@@ -398,13 +447,18 @@ function renderModels() {
     const meta = m.meta || {};
     const nm = noteFor(m);
     const badges = [];
+    if (nm.favorite) badges.push('<span class="card-tag" style="color:#e6a700">★ 收藏</span>');
+    // Variant indicator: same base model name with different quantizations
+    const baseName = m.name.replace(/(iq\d[\w_]*|q\d[\w_]*|fp16|fp32|bf16|f16|f32)/ig, '').replace(/[._\-]+$/g, '');
+    const variantCount = state.models.filter(x => x !== m && x.name.replace(/(iq\d[\w_]*|q\d[\w_]*|fp16|fp32|bf16|f16|f32)/ig, '').replace(/[._\-]+$/g, '') === baseName).length;
+    if (variantCount > 0) badges.push(`<span class="card-tag" title="同模型有其他量化版本">${variantCount + 1} 个变体</span>`);
     if (m.origin) badges.push(`<span class="card-tag" title="来自 ${esc(m.origin)}">${esc(m.origin)}</span>`);
     if (m.type && m.type !== 'GGUF') badges.push(`<span class="card-tag">${esc(m.type)}</span>`);
-    if (meta.quantization) badges.push(`<span class="card-tag quant">${esc(meta.quantization)}</span>`);
-    if (meta.architecture) badges.push(`<span class="card-tag">${esc(meta.architecture)}</span>`);
-    if (meta.contextLength) badges.push(`<span class="card-tag ctx">${Math.round(meta.contextLength / 1024)}K 上下文</span>`);
+    if (state.cols.quant && meta.quantization) badges.push(`<span class="card-tag quant">${esc(meta.quantization)}</span>`);
+    if (state.cols.arch && meta.architecture) badges.push(`<span class="card-tag">${esc(meta.architecture)}</span>`);
+    if (state.cols.ctx && meta.contextLength) badges.push(`<span class="card-tag ctx">${Math.round(meta.contextLength / 1024)}K 上下文</span>`);
     const param = formatParamCount(meta.parameterCount);
-    if (param) badges.push(`<span class="card-tag">${esc(param)} 参数</span>`);
+    if (state.cols.params && param) badges.push(`<span class="card-tag">${esc(param)} 参数</span>`);
     if (nm.tags && nm.tags.length) {
       nm.tags.forEach((t) => badges.push(`<span class="card-tag usertag">${esc(t)}</span>`));
     }
@@ -488,6 +542,7 @@ function openDrawer(filePath) {
   el.drawerArchBadge.textContent = meta.architecture || '未知架构';
   el.detailTags.value = (nm.tags || []).join(', ');
   el.detailNote.value = nm.note || '';
+  document.getElementById('btn-favorite').textContent = nm.favorite ? '★ 已收藏' : '☆ 收藏';
   el.detailPath.textContent = m.path;
   el.detailSha.textContent = '';
   el.detailSha.removeAttribute('data-cmd');
@@ -598,6 +653,37 @@ document.querySelectorAll('.nav-item').forEach((item) => {
 document.getElementById('drawer-close').addEventListener('click', closeDrawer);
 el.drawerOverlay.addEventListener('click', closeDrawer);
 
+document.getElementById('btn-favorite').addEventListener('click', async () => {
+  if (!state.currentModel) return;
+  const nm = noteFor(state.currentModel);
+  nm.favorite = !nm.favorite;
+  const ok = await api.saveNote(state.currentModel.path, nm);
+  if (ok) {
+    state.notes[state.currentModel.path] = nm;
+    document.getElementById('btn-favorite').textContent = nm.favorite ? '★ 已收藏' : '☆ 收藏';
+    showToast(nm.favorite ? '已收藏（置顶显示）' : '已取消收藏');
+    renderModels();
+  }
+});
+document.getElementById('btn-rename').addEventListener('click', async () => {
+  if (!state.currentModel) return;
+  const cur = state.currentModel.name;
+  const next = prompt('重命名文件（保留扩展名）：', cur);
+  if (!next || next === cur) return;
+  const r = await api.renameModelFile(state.currentModel.path, next);
+  if (r.ok) { showToast('已重命名'); state.currentModel.path = r.path; state.currentModel.name = r.path.split('\\').pop().split('/').pop(); await refreshModels(); }
+  else showToast('重命名失败：' + r.error);
+});
+
+document.getElementById('btn-move').addEventListener('click', async () => {
+  if (!state.currentModel) return;
+  const dir = await api.pickDirectory();
+  if (!dir) return;
+  const r = await api.moveModelFiles([state.currentModel.path], dir);
+  if (r.ok && r.moved.length) { showToast('已移动到：' + dir); await refreshModels(); }
+  else showToast('移动失败：' + (r.errors?.join('; ') || r.error || '未知错误'));
+});
+
 document.getElementById('btn-save-note').addEventListener('click', async () => {
   if (!state.currentModel) return;
   const tags = el.detailTags.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
@@ -705,9 +791,31 @@ async function openSettings() {
     el.settingsConflict.value = settings.conflict || 'skip';
     el.settingsConcurrent.value = String(settings.concurrent || 2);
     maxConcurrent = settings.concurrent || 2;
+    const theme = settings.theme || 'light';
+    document.getElementById('settings-theme').value = theme;
+    applyTheme(theme);
+    state.cols = settings.cols || state.cols;
+    document.getElementById('col-arch').checked = state.cols.arch !== false;
+    document.getElementById('col-quant').checked = state.cols.quant !== false;
+    document.getElementById('col-ctx').checked = state.cols.ctx !== false;
+    document.getElementById('col-params').checked = state.cols.params !== false;
   } catch (e) { /* keep default */ }
   el.settingsModal.classList.remove('hidden');
 }
+
+document.getElementById('settings-save-cols').addEventListener('click', async () => {
+  const settings = await api.loadSettings();
+  settings.cols = {
+    arch: document.getElementById('col-arch').checked,
+    quant: document.getElementById('col-quant').checked,
+    ctx: document.getElementById('col-ctx').checked,
+    params: document.getElementById('col-params').checked,
+  };
+  state.cols = settings.cols;
+  await api.saveSettings(settings);
+  renderModels();
+  showToast('显示设置已保存');
+});
 
 document.getElementById('settings-save-network').addEventListener('click', async () => {
   const settings = await api.loadSettings();
@@ -1089,6 +1197,7 @@ async function runDownload(task, d) {
     cur.loaded = cur.total || cur.loaded;
     if (result.skipped) showToast('文件已存在，跳过：' + d.name);
     else showToast('下载完成：' + d.name);
+    try { if (document.hidden && api.notifyDownloadDone) api.notifyDownloadDone(d.name); } catch (_) {}
     if (!state.folders.includes(task.destDir)) {
       state.folders.push(task.destDir);
       await api.saveFolders(state.folders);
@@ -1234,6 +1343,7 @@ api.onDownloadProgress((p) => {
 
 // ---- Init ----
 (async () => {
+  applyTheme('light'); // default until saved theme loads
   state.folders = await api.loadFolders();
   state.notes = await api.loadNotes();
   state.gpus = await api.getGpus();
