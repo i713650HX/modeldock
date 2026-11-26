@@ -10,6 +10,7 @@ const { URL } = require('url');
 const SOURCES = {
   hf: { name: 'Hugging Face', api: 'https://huggingface.co', web: 'https://huggingface.co' },
   mirror: { name: 'HF 镜像 (国内)', api: 'https://hf-mirror.com', web: 'https://hf-mirror.com' },
+  ms: { name: 'ModelScope 魔搭', api: 'https://www.modelscope.cn', web: 'https://www.modelscope.cn' },
 };
 
 const USER_AGENT = 'ModelLodge/1.0 (+local-model-manager)';
@@ -136,7 +137,8 @@ function detectFileType(fname) {
 }
 
 // Get all files for a repo, with smart sorting (model files first, then by size).
-async function getModelFiles(repoId, sourceKey) {
+async function getModelFiles(repoId, sourceKey, revision) {
+  if (sourceKey === 'ms') return getModelScopeFiles(repoId, revision);
   const src = SOURCES[sourceKey] || SOURCES.mirror;
   const url = src.api + '/api/models/' + repoId;
   const data = await getJSON(url);
@@ -170,9 +172,34 @@ async function getModelFiles(repoId, sourceKey) {
 // ---- Download engine ----
 const activeDownloads = new Map(); // id -> { cancelled, paused, ... }
 
-function formatUrl(repoId, filePath, sourceKey) {
+function formatUrl(repoId, filePath, sourceKey, revision) {
   const src = SOURCES[sourceKey] || SOURCES.mirror;
-  return src.api + '/' + repoId + '/resolve/main/' + filePath.split('/').map(encodeURIComponent).join('/') + '?download=true';
+  const rev = (revision || (sourceKey === 'ms' ? 'master' : 'main')).replace(/[^a-zA-Z0-9._\-\/]/g, '');
+  if (sourceKey === 'ms') {
+    return src.api + '/models/' + repoId + '/resolve/' + rev + '/' + filePath.split('/').map(encodeURIComponent).join('/');
+  }
+  return src.api + '/' + repoId + '/resolve/' + rev + '/' + filePath.split('/').map(encodeURIComponent).join('/') + '?download=true';
+}
+
+// ModelScope file list: GET /api/v1/models/{ns}/{name}/repo/files?Revision=master
+async function getModelScopeFiles(repoId, revision) {
+  const rev = (revision || 'master').replace(/[^a-zA-Z0-9._\-]/g, '');
+  const url = SOURCES.ms.api + '/api/v1/models/' + repoId + '/repo/files?Revision=' + encodeURIComponent(rev);
+  const data = await getJSON(url);
+  const raw = (data.Data && data.Data.Files) || [];
+  const modelExts = /\.(gguf|safetensors|bin|pt|pth|onnx|ckpt|h5|pb|tflite|npz|zip|tar|gz)$/i;
+  return raw
+    .filter(f => f.Path && !f.Path.startsWith('.'))
+    .map(f => {
+      const fname = path.basename(f.Path);
+      let quant = null;
+      const qm = fname.match(/(iq\d[\w_]*|q\d[\w_]*|fp16|fp32|bf16|f16|f32)/i);
+      if (qm) quant = qm[1].toUpperCase();
+      const size = f.Size ? parseInt(f.Size, 10) : null;
+      return { name: fname, path: f.Path, size: isFinite(size) ? size : null, quant,
+        type: detectFileType(fname), isModel: modelExts.test(fname), dir: path.dirname(f.Path) };
+    })
+    .sort((a, b) => (b.isModel - a.isModel));
 }
 
 function requestOnce(url, opts, redirects = 0) {
@@ -246,9 +273,9 @@ async function downloadFile(task, onProgress) {
     url = task.url;
     fileName = task.fileName || fileNameFromUrl(url);
   } else {
-    const { repoId, file, sourceKey } = task;
+    const { repoId, file, sourceKey, revision } = task;
     fileName = file.name;
-    url = formatUrl(repoId, file.path, sourceKey);
+    url = formatUrl(repoId, file.path, sourceKey, revision);
   }
 
   // Conflict policy: what to do if the final file already exists.
