@@ -1,8 +1,9 @@
-# ModelLodge — 本地模型管理器 v1.1.0（正式发布版）
+# ModelLodge — 本地模型管理器 v1.2.0（正式发布版）
 
 本地模型管理工具：**模型下载 + 管理 + 全品牌显卡显存判断 + 文件校验 + 完整开源致谢 + 本地崩溃日志**，全中文界面、中文安装向导。
 
-**v1.1.0 新增：HF Token 认证** — 设置里填 Token（Windows 系统级加密存储），即可下载 Llama/Gemma 等 gated/私有模型；Token 只对 HF 域名发送，重定向到 CDN 时自动剥离。
+**v1.2.0 新增：网络与下载增强** — 镜像源一键测速、HTTP/HTTPS 代理、下载卡死自动重试（停滞检测+断点续传）、同名冲突策略（跳过/覆盖/重命名）。
+**v1.1.0：HF Token 认证** — 系统级加密存储，下载 Llama/Gemma 等 gated 模型；Token 只对 HF 域名发送。
 
 > 命名沿革：前身 ModelVault 内部迭代到 v2.2.1 后，因与 Cohere 企业产品「Model Vault」重名，且 ModelDock 撞多个同类项目，最终定名 **ModelLodge**（模型小屋），版本从 v1.0.0 起算。
 
@@ -30,13 +31,17 @@
 - 应用内使用指南（F1）、开源致谢（帮助菜单）
 - exe 属性中文元数据
 
+## 网络与下载高级设置
+
+设置里可配置：代理地址（HTTP/HTTPS，校园网/公司网加速）、镜像源一键测速、同名文件冲突策略（跳过/覆盖/重命名）、下载卡死看门狗（连续 8 秒无数据传输自动从断点重试，最多 3 次，不显示假进度）。
+
 ## 下载受限模型（HF Token）
 
 Llama、Gemma 等 gated 模型需要授权：在 https://huggingface.co/settings/tokens 创建 Read Token，模型页同意协议，软件设置里粘贴保存即可。Token 用 DPAPI 加密存本地，不上传。不配 Token 也能下载所有公开模型。
 
 ## 安装
 
-双击 `ModelLodge-Setup-1.1.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
+双击 `ModelLodge-Setup-1.2.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
 桌面和开始菜单生成快捷方式。卸载走控制面板，不删你的标签备注数据。
 
 ## 下载后遇到安全警告怎么办（重要）
@@ -71,7 +76,12 @@ Release 下载：**[Releases](../../releases/latest)**
 
 ## 校验信息
 
-**v1.1.0 正式发布版（当前推荐）**
+**v1.2.0 正式发布版（当前推荐）**
+- 文件：`ModelLodge-Setup-1.2.0.exe`
+- 大小：76,172,565 字节（73 MB）
+- SHA256：`ce87ee9bceefd18f595a9068e8afd8cda1ea611618e1ff13750ea0776448691c`
+
+**v1.1.0（存档）**
 - 文件：`ModelLodge-Setup-1.1.0.exe`
 - 大小：76,152,925 字节（73 MB）
 - SHA256：`7f1db13a950c039b79f4540dba17999dfacb4ac1ff72ce4488b631718c842896`
@@ -91,7 +101,7 @@ Release 下载：**[Releases](../../releases/latest)**
 - v1.5.0 — 76,121,439 字节 — SHA256 `b94cc369a0ff39a5b12ebcd269845ac67a9017a372c71cdba5ced8a355044578`
 - v1.4.0 — 76,118,287 字节 — SHA256 `20cd02a30a47485d0e18f9cca93f5d9e856a2c13c9e7fc377d0cf981363ba228`
 - v1.3.0 — 76,116,936 字节 — SHA256 `f36bd413c526c47c4fcf7b6adc9b901c2198ea332e5de1fda3e7304d7ee95ebe`
-- v1.2.0 — 76,111,194 字节 — SHA256 `1c9fcc011101247bd6088c93f6f3db923cb53f20cfcb4fea39f28e049d9ecd71`
+- v1.2.0 早期版 — 76,111,194 字节 — SHA256 `1c9fcc011101247bd6088c93f6f3db923cb53f20cfcb4fea39f28e049d9ecd71`
 - v1.1.0 早期版 — 76,178,868 字节 — SHA256 `283feb706137afdd1fec311183c083dfee8e38352bcea2bec0863a9c9ddec5d3`
 - 早期 v1.0.0 半成品 — 已移至 `archive/`
 
