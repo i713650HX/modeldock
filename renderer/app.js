@@ -66,6 +66,9 @@ const el = {
   settingsDepth: document.getElementById('settings-depth'),
   settingsHfToken: document.getElementById('settings-hf-token'),
   settingsTokenStatus: document.getElementById('settings-token-status'),
+  settingsProxy: document.getElementById('settings-proxy'),
+  settingsConflict: document.getElementById('settings-conflict'),
+  settingsMirrorResult: document.getElementById('settings-mirror-result'),
   settingsResetNotes: document.getElementById('settings-reset-notes'),
   libraryView: document.getElementById('library-view'),
   downloadView: document.getElementById('download-view'),
@@ -682,9 +685,35 @@ async function openSettings() {
     const hasToken = await api.hasSecret('hfToken');
     el.settingsHfToken.value = '';
     el.settingsTokenStatus.textContent = hasToken ? '状态：已保存 Token（留空并保存可清除）' : '状态：未设置';
+    el.settingsProxy.value = settings.proxy || '';
+    el.settingsConflict.value = settings.conflict || 'skip';
   } catch (e) { /* keep default */ }
   el.settingsModal.classList.remove('hidden');
 }
+
+document.getElementById('settings-save-network').addEventListener('click', async () => {
+  const settings = await api.loadSettings();
+  settings.proxy = el.settingsProxy.value.trim();
+  settings.conflict = el.settingsConflict.value;
+  const ok = await api.saveSettings(settings);
+  showToast(ok ? '网络设置已保存（重启后仍生效）' : '保存失败');
+});
+
+document.getElementById('settings-test-mirror').addEventListener('click', async () => {
+  el.settingsMirrorResult.textContent = '测试中...';
+  try {
+    const [hf, mirror] = await Promise.all([
+      api.testMirrorSpeed('hf'),
+      api.testMirrorSpeed('mirror'),
+    ]);
+    const fmt = (r) => r.ok ? (r.ms + ' ms') : '不可用';
+    const faster = (hf.ok && hf.ms <= mirror.ms) ? 'Hugging Face' : (mirror.ok ? '国内镜像' : '无可用源');
+    el.settingsMirrorResult.textContent =
+      'Hugging Face: ' + fmt(hf) + ' | 国内镜像: ' + fmt(mirror) + ' → 推荐：' + faster;
+  } catch (e) {
+    el.settingsMirrorResult.textContent = '测速失败: ' + e.message;
+  }
+});
 
 document.getElementById('settings-save-token').addEventListener('click', async () => {
   const val = el.settingsHfToken.value.trim();
