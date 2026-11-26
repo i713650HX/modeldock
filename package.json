@@ -1,9 +1,9 @@
 {
-  "name": "modeldock",
+  "name": "modellodge",
   "version": "1.0.0",
-  "description": "ModelDock 本地模型管理器 — 下载、管理、显存适配与校验",
+  "description": "ModelLodge 本地模型管理器 — 下载、管理、显存适配与校验",
   "main": "main.js",
-  "author": "ModelDock Team",
+  "author": "ModelLodge Team",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -11,9 +11,9 @@
     "dist": "electron-builder --win --x64 --publish never"
   },
   "build": {
-    "appId": "com.workbuddy.modeldock",
-    "productName": "ModelDock",
-    "copyright": "Copyright © 2026 ModelDock Team. 保留所有权利。",
+    "appId": "com.workbuddy.modellodge",
+    "productName": "ModelLodge",
+    "copyright": "Copyright © 2026 ModelLodge Team. 保留所有权利。",
     "directories": {
       "output": "dist"
     },
@@ -52,7 +52,7 @@
         }
       ],
       "icon": "icon.png",
-      "artifactName": "ModelDock-Setup-${version}.${ext}"
+      "artifactName": "ModelLodge-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -64,11 +64,11 @@
       "license": "LICENSE.rtf",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "ModelDock",
+      "shortcutName": "ModelLodge",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
       "menuCategory": true,
-      "artifactName": "ModelDock-Setup-${version}.${ext}"
+      "artifactName": "ModelLodge-Setup-${version}.${ext}"
     }
   },
   "devDependencies": {
