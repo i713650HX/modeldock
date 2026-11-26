@@ -105,14 +105,14 @@
 
 ## 命令行工具（mldl.js）
 
-安装目录里有 `mldl.js`，可与 GUI 共用下载引擎：
+安装目录的 `cli` 文件夹里有 `mldl.js`（例如 `C://Program Files\ModelLodge\cli\`），可与 GUI 共用下载引擎：
 
 ```
-node mldl.js sources                         查看可用源
-node mldl.js search Qwen2.5 mirror           搜索模型
-node mldl.js files qwen/Qwen2.5-7B-Instruct ms   列出仓库文件
-node mldl.js get <repo> <文件路径> [保存目录] [源]   下载文件
-node mldl.js ls [目录]                       列出本地模型
+node cli/mldl.js sources                         查看可用源
+node cli/mldl.js search Qwen2.5 mirror           搜索模型
+node cli/mldl.js files qwen/Qwen2.5-7B-Instruct ms   列出仓库文件
+node cli/mldl.js get <repo> <文件路径> [保存目录] [源]   下载文件
+node cli/mldl.js ls [目录]                       列出本地模型
 ```
 
 下载页还有「精选推荐」快捷入口，一点即搜常用模型。首页顶部 KPI 显示模型数、总大小、显卡数、格式分布。
