@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('api', {
   getLicenses: () => ipcRenderer.invoke('get-licenses'),
   openLicenseFile: (name) => ipcRenderer.invoke('open-license-file', name),
   log: (level, message) => ipcRenderer.send('renderer-log', level, message),
+  notifyDownloadDone: (name) => ipcRenderer.send('notify-download-done', name),
   getLogDir: () => ipcRenderer.invoke('get-log-dir'),
   getGuide: () => ipcRenderer.invoke('get-guide'),
   setSecret: (key, value) => ipcRenderer.invoke('set-secret', key, value),
@@ -45,6 +46,9 @@ contextBridge.exposeInMainWorld('api', {
   saveDownloads: (tasks) => ipcRenderer.invoke('save-downloads', tasks),
   loadDownloads: () => ipcRenderer.invoke('load-downloads'),
   checkShards: (p) => ipcRenderer.invoke('check-shards', p),
+  importDroppedPaths: (paths, folders) => ipcRenderer.invoke('import-dropped-paths', paths, folders),
+  renameModelFile: (oldPath, newName) => ipcRenderer.invoke('rename-model-file', oldPath, newName),
+  moveModelFiles: (paths, targetDir) => ipcRenderer.invoke('move-model-files', paths, targetDir),
   onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (e, data) => callback(data)),
 
   // menu events from main process
