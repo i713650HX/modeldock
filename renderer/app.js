@@ -64,6 +64,8 @@ const el = {
   settingsFolders: document.getElementById('settings-folders'),
   settingsAddFolder: document.getElementById('settings-add-folder'),
   settingsDepth: document.getElementById('settings-depth'),
+  settingsHfToken: document.getElementById('settings-hf-token'),
+  settingsTokenStatus: document.getElementById('settings-token-status'),
   settingsResetNotes: document.getElementById('settings-reset-notes'),
   libraryView: document.getElementById('library-view'),
   downloadView: document.getElementById('download-view'),
@@ -677,9 +679,24 @@ async function openSettings() {
   try {
     const settings = await api.loadSettings();
     if (settings && settings.scanDepth) el.settingsDepth.value = String(settings.scanDepth);
+    const hasToken = await api.hasSecret('hfToken');
+    el.settingsHfToken.value = '';
+    el.settingsTokenStatus.textContent = hasToken ? '状态：已保存 Token（留空并保存可清除）' : '状态：未设置';
   } catch (e) { /* keep default */ }
   el.settingsModal.classList.remove('hidden');
 }
+
+document.getElementById('settings-save-token').addEventListener('click', async () => {
+  const val = el.settingsHfToken.value.trim();
+  const ok = await api.setSecret('hfToken', val);
+  if (ok) {
+    el.settingsHfToken.value = '';
+    el.settingsTokenStatus.textContent = val ? '状态：已保存（系统加密）' : '状态：已清除';
+    showToast(val ? 'Token 已加密保存' : 'Token 已清除');
+  } else {
+    showToast('保存失败');
+  }
+});
 
 el.settingsDepth.addEventListener('change', async () => {
   const depth = Number(el.settingsDepth.value);
