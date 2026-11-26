@@ -1,5 +1,5 @@
 // Local-only crash/log system. NEVER uploads anything.
-// Logs go to %APPDATA%\model-vault\logs\modelvault-YYYY-MM-DD.log
+// Logs go to %APPDATA%\modeldock\logs\modeldock-YYYY-MM-DD.log
 // Keeps the last 7 days of logs; older files are pruned on startup.
 const fs = require('fs');
 const path = require('path');
@@ -17,7 +17,7 @@ function ensureLogFile() {
   const date = now.toISOString().slice(0, 10); // YYYY-MM-DD (UTC, fine for naming)
   if (date !== currentDate || !currentPath) {
     currentDate = date;
-    currentPath = path.join(LOG_DIR, 'modelvault-' + date + '.log');
+    currentPath = path.join(LOG_DIR, 'modeldock-' + date + '.log');
     try {
       fs.mkdirSync(LOG_DIR, { recursive: true });
       if (fs.existsSync(currentPath) && fs.statSync(currentPath).size > MAX_SIZE) {
@@ -50,7 +50,7 @@ function pruneOldLogs() {
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
     const files = fs.readdirSync(LOG_DIR)
-      .filter((f) => /^modelvault-\d{4}-\d{2}-\d{2}(-\d+)?\.log$/.test(f))
+      .filter((f) => /^modeldock-\d{4}-\d{2}-\d{2}(-\d+)?\.log$/.test(f))
       .map((f) => ({ name: f, mtime: fs.statSync(path.join(LOG_DIR, f)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime);
     for (const f of files.slice(MAX_LOG_FILES)) {
