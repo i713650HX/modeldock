@@ -1,10 +1,10 @@
-# ModelVault — 本地模型管理器 v1.0.0（正式发布版）
+# ModelDock — 本地模型管理器 v1.0.0（正式发布版）
 
-本地模型管理工具：**管理 + 下载 + 全品牌显卡显存判断 + 文件校验 + 完整开源致谢 + 本地崩溃日志**，全中文界面、中文安装向导。
+本地模型管理工具：**模型下载 + 管理 + 全品牌显卡显存判断 + 文件校验 + 完整开源致谢 + 本地崩溃日志**，全中文界面、中文安装向导。
 
-**当前版本：v1.0.0（正式发布版，就是之前内部迭代到 2.2.1 的完整成品重新编号）**。更早的 v1.0.0（早期半成品）已归档到 `archive/ModelVault-Setup-1.0.0-early.exe`，v1.1.0~v2.2.1 是内部开发版本，都在下方存档列表里。
+> 前身 ModelVault 内部迭代到 v2.2.1 后，因与 Cohere 的企业产品「Model Vault」重名、搜索时易被淹没，正式发布时更名为 **ModelDock**，版本重新从 v1.0.0 起算。
 
-## 正式版功能一览
+## 功能一览
 
 **全品牌显卡识别 + 显存适配判断**
 - 自动检测所有显卡（NVIDIA/AMD/Intel + 摩尔线程/壁仞/沐曦/海光/景嘉微等国产卡），每张显示品牌中文名和显存
@@ -24,13 +24,13 @@
 - 一键生成 llama.cpp / Ollama 加载命令；导出 CSV；SHA256 校验
 
 **工程化**
-- 本地崩溃日志（`%APPDATA%\model-vault\logs\`，仅本地不上传）
+- 本地崩溃日志（`%APPDATA%\modeldock\logs\`，仅本地不上传）
 - 应用内使用指南（F1）、开源致谢（帮助菜单）
 - exe 属性中文元数据
 
 ## 安装
 
-双击 `ModelVault-Setup-1.0.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
+双击 `ModelDock-Setup-1.0.0.exe` → 选语言 → 接受许可协议 → 选路径 → 完成。
 桌面和开始菜单生成快捷方式。卸载走控制面板，不删你的标签备注数据。
 
 ## 下载后遇到安全警告怎么办（重要）
@@ -56,21 +56,21 @@
 
 - 软件不修改已有模型；下载只写入指定目录；`.part` 临时文件仅在下载时存在。
 - 除下载和显卡检测外完全离线，不上传本地数据。
-- 配置在 `%APPDATA%\model-vault\`：folders.json / notes.json / meta-cache.json / settings.json / logs\。
+- 配置在 `%APPDATA%\modeldock\`：folders.json / notes.json / meta-cache.json / settings.json / logs\。
 
 ## GitHub
 
-源码和安装包已发布：**https://github.com/i713650HX/model-vault**
-Release 下载：**https://github.com/i713650HX/model-vault/releases/latest**
+源码和安装包：**[i713650HX/modeldock](https://github.com/i713650HX/modeldock)**
+Release 下载：**[Releases](../../releases/latest)**
 
 ## 校验信息
 
 **v1.0.0 正式发布版（当前推荐）**
-- 文件：`ModelVault-Setup-1.0.0.exe`
-- 大小：76,135,394 字节（73 MB）
-- SHA256：`4d883d9df5a4f71b094e286663007fa175d50241250e285d1668161f98f0cf59`
+- 文件：`ModelDock-Setup-1.0.0.exe`
+- 大小：76,135,319 字节（73 MB）
+- SHA256：`32631c13603326e8b9c0c491b35f163c38ba0f97d764b16203e3335fe9557386`
 
-**内部开发版 / 早期版（存档，不建议下载）**
+**前身 ModelVault 内部开发版（存档，不建议下载）**
 - v2.2.1 — 76,135,387 字节 — SHA256 `b9d431555d8fa7236bcd835ae729c79468cb2ca3876b73610338683c42860b84`
 - v2.2.0 — 76,134,611 字节 — SHA256 `923a531d2d68435fd959ec40e24a05aa55ac8b035ad20bad6125f4e8ea83e60e`
 - v2.1.0 — 76,130,187 字节 — SHA256 `1d9a0de2639c16006cb2d0c98e26f63ef2f58846d944ef4af7382bee10519b81`
@@ -82,6 +82,6 @@ Release 下载：**https://github.com/i713650HX/model-vault/releases/latest**
 - v1.3.0 — 76,116,936 字节 — SHA256 `f36bd413c526c47c4fcf7b6adc9b901c2198ea332e5de1fda3e7304d7ee95ebe`
 - v1.2.0 — 76,111,194 字节 — SHA256 `1c9fcc011101247bd6088c93f6f3db923cb53f20cfcb4fea39f28e049d9ecd71`
 - v1.1.0 — 76,178,868 字节 — SHA256 `283feb706137afdd1fec311183c083dfee8e38352bcea2bec0863a9c9ddec5d3`
-- v1.0.0 早期半成品 — 76,173,759 字节 — SHA256 `be429ad4f3eab4fe45050d51b4dc6ca0aa9c1f0952a36142aae4d3c6850775e8`（已移至 archive/）
+- 早期 v1.0.0 半成品 — 已移至 `archive/`
 
 基于 Electron 28.3.3 / electron-builder 24.13.3 构建。
