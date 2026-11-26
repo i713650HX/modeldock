@@ -103,6 +103,17 @@
 - 已被隔离的，去隔离区恢复文件并添加信任
 - 实在不行临时退出杀软，装完再打开
 
+## 下载受限模型（HF Token）
+
+Llama、Gemma 等模型需要 Hugging Face 账号授权（gated）才能下载。配置方法：
+
+1. 去 https://huggingface.co/settings/tokens 创建一个 **Read** 权限的 Token（`hf_` 开头）
+2. 在需要授权的模型页面点同意协议（一次即可）
+3. 软件里打开设置（Ctrl+,）→ 找到「Hugging Face Token」→ 粘贴 → 点「保存 Token」
+4. Token 用 **Windows 系统级加密（DPAPI）** 存在本地，不上传；只发给 huggingface.co / hf-mirror.com，重定向到 CDN 时自动剥离
+
+不配 Token 也能正常下载绝大部分公开模型。
+
 **自己确认文件没问题的方法**
 - 用 PowerShell 执行 `Get-FileHash "安装包路径" -Algorithm SHA256`，与发布页的 SHA256 值比对，一致即未被篡改
 - 软件除下载和显卡检测外完全离线，不上传任何数据
