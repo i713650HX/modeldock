@@ -375,7 +375,7 @@ ipcMain.handle('open-external', async (event, url) => {
 
 // ---- Model downloader (Hugging Face) ----
 const downloader = require('./downloader');
-const { downloadFile, searchModels, getModelFiles, cancelDownload, pauseDownload, resumeDownload, setHfToken } = downloader;
+const { downloadFile, searchModels, getModelFiles, cancelDownload, pauseDownload, resumeDownload, setHfToken, setProxy, testMirrorSpeed } = downloader;
 
 ipcMain.handle('hf-search', async (event, query, source, typeFilter) => {
   try {
@@ -399,6 +399,7 @@ ipcMain.handle('hf-files', async (event, repoId, source) => {
 
 ipcMain.handle('download-start', async (event, task) => {
   // task: { id, repoId, file, destDir, sourceKey }
+  if (!task.conflict) task.conflict = appSettings.conflict || 'skip';
   try {
     const result = await downloadFile(task, (progress) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -429,6 +430,7 @@ ipcMain.handle('pick-download-dir', async () => {
 // ---- Direct URL download (universal: any model, any source) ----
 ipcMain.handle('download-url', async (event, task) => {
   // task: { id, url, fileName, destDir }
+  if (!task.conflict) task.conflict = appSettings.conflict || 'skip';
   try {
     const result = await downloadFile(task, (progress) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -508,20 +510,34 @@ if (appSettings.scanDepth && appSettings.scanDepth >= 1 && appSettings.scanDepth
   scanDepth = appSettings.scanDepth;
 }
 
-ipcMain.handle('load-settings', async () => ({ scanDepth }));
+ipcMain.handle('load-settings', async () => ({ scanDepth, proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip' }));
 
 ipcMain.handle('save-settings', async (event, settings) => {
   try {
-    if (settings && settings.scanDepth >= 1 && settings.scanDepth <= 20) {
+    if (!settings) return false;
+    if (settings.scanDepth >= 1 && settings.scanDepth <= 20) {
       scanDepth = settings.scanDepth;
       appSettings.scanDepth = scanDepth;
-      fs.writeFileSync(settingsPath, JSON.stringify(appSettings, null, 2), 'utf8');
-      return true;
     }
-    return false;
+    if (typeof settings.proxy === 'string') {
+      appSettings.proxy = settings.proxy.trim();
+      setProxy(appSettings.proxy);
+    }
+    if (['skip', 'overwrite', 'rename'].includes(settings.conflict)) {
+      appSettings.conflict = settings.conflict;
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(appSettings, null, 2), 'utf8');
+    return true;
   } catch (e) {
+    logger.error('save-settings failed', e);
     return false;
   }
+});
+
+// mirror speed test
+ipcMain.handle('test-mirror-speed', async (event, sourceKey) => {
+  try { return await testMirrorSpeed(sourceKey); }
+  catch (e) { return { source: sourceKey, ms: -1, ok: false }; }
 });
 
 // ---- Third-party license notices ----
@@ -638,3 +654,5 @@ function syncHfToken() {
   } catch (e) { setHfToken(''); }
 }
 syncHfToken();
+// Apply saved proxy on startup
+try { setProxy(appSettings.proxy || ''); } catch (e) { /* ignore */ }
