@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, Notification } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { parseGGUF } = require('./gguf');
@@ -565,7 +565,7 @@ if (appSettings.scanDepth && appSettings.scanDepth >= 1 && appSettings.scanDepth
   scanDepth = appSettings.scanDepth;
 }
 
-ipcMain.handle('load-settings', async () => ({ scanDepth, proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip', concurrent: appSettings.concurrent || 2 }));
+ipcMain.handle('load-settings', async () => ({ scanDepth, proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip', concurrent: appSettings.concurrent || 2, theme: appSettings.theme || 'light' }));
 
 ipcMain.handle('save-settings', async (event, settings) => {
   try {
@@ -583,6 +583,9 @@ ipcMain.handle('save-settings', async (event, settings) => {
     }
     if (settings.concurrent >= 1 && settings.concurrent <= 8) {
       appSettings.concurrent = settings.concurrent;
+    }
+    if (['light', 'dark', 'system'].includes(settings.theme)) {
+      appSettings.theme = settings.theme;
     }
     fs.writeFileSync(settingsPath, JSON.stringify(appSettings, null, 2), 'utf8');
     return true;
@@ -772,4 +775,65 @@ ipcMain.handle('check-shards', async (event, filePath) => {
   } catch (e) {
     return { applicable: false, error: e.message };
   }
+});
+
+// ---- Drag & drop model files/folders into the app ----
+// Resolve dropped paths to their containing folders; renderer merges with its folder list.
+ipcMain.handle('import-dropped-paths', async (event, paths, currentFolders) => {
+  try {
+    const folders = Array.isArray(currentFolders) ? [...currentFolders] : [];
+    const addedDirs = [];
+    for (const p of (paths || [])) {
+      try {
+        const st = fs.statSync(p);
+        const dir = st.isDirectory() ? p : path.dirname(p);
+        if (!folders.includes(dir)) { folders.push(dir); addedDirs.push(dir); }
+      } catch (e) { /* skip invalid paths */ }
+    }
+    if (addedDirs.length) fs.writeFileSync(storePath, JSON.stringify(folders, null, 2), 'utf8');
+    return { ok: true, added: addedDirs.length, folders };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ---- Desktop notification on download completion ----
+ipcMain.on('notify-download-done', (event, name) => {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title: 'ModelLodge - 下载完成', body: name, icon: path.join(__dirname, 'icon.png') });
+    n.on('click', () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
+    n.show();
+  } catch (e) { /* notifications are best-effort */ }
+});
+
+// ---- File management: rename / move model file (batch-friendly IPC) ----
+ipcMain.handle('rename-model-file', async (event, oldPath, newName) => {
+  try {
+    const dir = path.dirname(oldPath);
+    const safe = String(newName).replace(/[<>:"|?*\\/]/g, '_').trim();
+    if (!safe) return { ok: false, error: 'invalid name' };
+    const newPath = path.join(dir, safe);
+    if (fs.existsSync(newPath)) return { ok: false, error: '目标文件已存在' };
+    fs.renameSync(oldPath, newPath);
+    return { ok: true, path: newPath };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('move-model-files', async (event, filePaths, targetDir) => {
+  try {
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+    const moved = [];
+    const errors = [];
+    for (const src of filePaths) {
+      try {
+        const dest = path.join(targetDir, path.basename(src));
+        if (fs.existsSync(dest)) { errors.push(path.basename(src) + ': target exists'); continue; }
+        fs.renameSync(src, dest); // same volume fast; cross-volume falls back below
+        moved.push(dest);
+      } catch (e) {
+        try { fs.copyFileSync(src, path.join(targetDir, path.basename(src))); fs.unlinkSync(src); moved.push(path.join(targetDir, path.basename(src))); }
+        catch (e2) { errors.push(path.basename(src) + ': ' + e2.message); }
+      }
+    }
+    return { ok: true, moved, errors };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
