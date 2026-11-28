@@ -65,22 +65,22 @@ Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可�
 
 ### 主程序
 
-下载 `ModelLodge-Setup-2.5.2.exe`（Windows x64，NSIS 安装向导，无需管理员权限），双击安装即可。**2.5.1 起修复了升级后本地模型在界面「消失」的问题**（模型文件一直都在，只是记录模型目录的配置被旧版卸载程序清掉了；已关闭该行为，并在配置丢失时自动从磁盘找回模型目录）。**2.5.2 另修复三处对话问题**：多模态投影文件（mmproj）不再冒充可对话模型导致加载失败；默认开启显卡加速，回复不再慢到转圈；点「停止」后能立刻发新消息，不会再被「正在生成中」卡住。从旧版升级的用户请直接装本版。
+下载 `ModelLodge-Setup-2.5.3.exe`（Windows x64，NSIS 安装向导，无需管理员权限），双击安装即可。**2.5.1 起修复了升级后本地模型在界面「消失」的问题**（模型文件一直都在，只是记录模型目录的配置被旧版卸载程序清掉了；已关闭该行为，并在配置丢失时自动从磁盘找回模型目录）。**2.5.2 另修复三处对话问题**：多模态投影文件（mmproj）不再冒充可对话模型导致加载失败；默认开启显卡加速，回复不再慢到转圈；点「停止」后能立刻发新消息，不会再被「正在生成中」卡住。**2.5.3 首字响应提速约 6 倍**：Qwen3 等思考模型默认关闭深度思考（"你好"从 1966ms 降到 319ms），需要复杂推理时可在左侧勾选「深度思考」；开启后思考过程会实时显示在可折叠区块、正文开始后自动收起。从旧版升级的用户请直接装本版。
 
 个人开发者构建，**没有代码签名证书**。Windows SmartScreen 提示「未知发布者」属正常现象：核对下方 SHA256 一致后，点「更多信息」→「仍要运行」。
 
 PowerShell 校验：
 
 ```powershell
-Get-FileHash "ModelLodge-Setup-2.5.2.exe" -Algorithm SHA256
+Get-FileHash "ModelLodge-Setup-2.5.3.exe" -Algorithm SHA256
 ```
 
 | 文件 | 大小（字节） | SHA256（预期值） |
 | --- | --- | --- |
-| `ModelLodge-Setup-2.5.2.exe` | 98,066,209 | `1e762e2faf941e5c1d9e0402672a496c82db17ccff48bc38a34b5dc97dbe3738` |
+| `ModelLodge-Setup-2.5.3.exe` | 98,065,221 | `85925084df094110c9bfb0afb428334426ffba1d15e68fa1a5ccc9777df9fe51` |
 | `ModelLodge-CUDA12-Component.zip`（可选） | 747,577,064 | `ca38e8228327798949eb71711fa9b739a14c4334d8ac7aa0e906165f597444b1` |
 
-两个文件都在同一个 [Release 页面](https://github.com/i713650HX/modellodge/releases/tag/v2.5.2)。下载后若哈希与上表不一致，说明文件不完整或被篡改，请勿安装。
+两个文件都在同一个 [Release 页面](https://github.com/i713650HX/modellodge/releases/tag/v2.5.3)。下载后若哈希与上表不一致，说明文件不完整或被篡改，请勿安装。
 
 ### CUDA 组件包（可选，仅 NVIDIA）
 
