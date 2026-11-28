@@ -1,11 +1,20 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, Notification } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { parseGGUF } = require('./gguf');
 const logger = require('./logger');
 
 let mainWindow;
 const APP_VERSION = app.getVersion();
+// Public download URL for the optional CUDA component pack. Change this one
+// line if the zip is mirrored to another host (e.g. a China-friendly CDN).
+const CUDA_PACK_URL = 'https://github.com/i713650HX/modellodge/releases/download/v2.4.0/ModelLodge-CUDA12-Component.zip';
+function emitFileProgress(data) {
+  for (const w of BrowserWindow.getAllWindows()) {
+    try { w.webContents.send('file-progress', data); } catch (_) {}
+  }
+}
 
 // ---- Footprint optimizations (applied before app is ready) ----
 // This app is a flat list UI: no 3D/canvas, so Chromium's GPU process is pure overhead.
@@ -30,7 +39,11 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 // ---- Crash / error logging (local only, never uploaded) ----
 logger.pruneOldLogs();
 logger.info('=== ModelLodge ' + APP_VERSION + ' starting ===');
-app.on('before-quit', () => { try { logger.flush(); } catch (_) {} });
+app.on('before-quit', () => {
+  // Kill the bundled llama-server so it never lingers holding GPU memory/port.
+  try { require('./engine').stopEngine(); } catch (_) {}
+  try { logger.flush(); } catch (_) {}
+});
 
 process.on('uncaughtException', (err) => {
   logger.crash('uncaughtException', err);
@@ -194,8 +207,66 @@ ipcMain.handle('pick-directory', async () => {
   return result.filePaths[0];
 });
 
+// ---- Pick individual GGUF files anywhere on disk (for chat) ----
+// Remember the last directory: opening at "此电脑" makes Windows enumerate
+// every drive (network drives, WSL, removable media), which can hang the dialog.
+const lastModelDirPath = path.join(app.getPath('userData'), 'last-model-dir.json');
+let lastModelDir = '';
+try {
+  if (fs.existsSync(lastModelDirPath)) {
+    const saved = JSON.parse(fs.readFileSync(lastModelDirPath, 'utf8'));
+    if (saved && typeof saved.dir === 'string' && fs.existsSync(saved.dir)) lastModelDir = saved.dir;
+  }
+} catch (e) { /* ignore */ }
+
+function resolveStartDir() {
+  if (lastModelDir && fs.existsSync(lastModelDir)) return lastModelDir;
+  const home = app.getPath('home');
+  const candidates = [path.join(home, '.lmstudio', 'models'), path.join(home, 'Downloads'), home];
+  for (const c of candidates) { try { if (fs.existsSync(c)) return c; } catch (e) {} }
+  return home;
+}
+
+ipcMain.handle('pick-model-files', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile', 'multiSelections'],
+    title: '选择 GGUF 模型文件',
+    defaultPath: resolveStartDir(),
+    filters: [{ name: 'GGUF 模型', extensions: ['gguf'] }, { name: '所有文件', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePaths.length) return [];
+  try {
+    const dir = path.dirname(result.filePaths[0]);
+    if (dir && dir !== lastModelDir) {
+      lastModelDir = dir;
+      fs.writeFileSync(lastModelDirPath, JSON.stringify({ dir }), 'utf8');
+    }
+  } catch (e) { /* ignore */ }
+  // Async stat in parallel: statSync on a slow/network drive blocks the main
+  // process and is a common cause of the whole app freezing after a pick.
+  const files = await Promise.all(result.filePaths.map(async (p) => {
+    let size = 0;
+    try { size = (await fs.promises.stat(p)).size; } catch (e) { /* ignore */ }
+    return { path: p, name: path.basename(p), size };
+  }));
+  return files;
+});
+
 // ---- Recursive model-file scan with metadata parsing ----
 let scanDepth = 6; // configurable via settings
+// Directories that never contain model files. Users can extend the list in
+// Settings; the defaults stop scans from walking system/cache trees.
+const DEFAULT_SCAN_EXCLUDES = [
+  'Windows', 'Program Files', 'Program Files (x86)', 'ProgramData',
+  'AppData', '$Recycle.Bin', 'System Volume Information', 'Recovery',
+  'node_modules', '__pycache__', '.git', 'venv', '.venv', 'site-packages',
+  'dist', 'build', 'Cache', 'Code Cache', 'GPUCache', 'Temp',
+];
+let scanExcludes = DEFAULT_SCAN_EXCLUDES.slice();
+function excludedDirName(name) {
+  const n = name.toLowerCase();
+  return scanExcludes.some((x) => n === x.toLowerCase());
+}
 
 // All model file formats we recognize (15+) for the local asset library.
 const MODEL_EXTS = new Set([
@@ -220,9 +291,7 @@ function walkDir(dir, fileList, depth) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name.startsWith('.')) continue;
-      // Skip dirs that never hold model files — avoids walking thousands of
-      // dependency/cache entries when a model root is nested in a dev folder.
-      if (/^(node_modules|__pycache__|\.git|venv|\.venv|site-packages|dist|build|Cache|Code Cache|GPUCache)$/i.test(entry.name)) continue;
+      if (excludedDirName(entry.name)) continue;
       walkDir(full, fileList, depth + 1);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
@@ -406,6 +475,173 @@ ipcMain.handle('save-folders', async (event, folders) => {
   }
 });
 
+// ---- Persist chat's explicitly-imported GGUF files ----
+// Without this, importing a model from an arbitrary path only lives in memory
+// and is lost on restart — which defeats the whole "import from anywhere" flow.
+const importedModelsPath = path.join(app.getPath('userData'), 'imported-models.json');
+
+ipcMain.handle('load-imported-models', async () => {
+  try {
+    if (fs.existsSync(importedModelsPath)) {
+      const data = JSON.parse(fs.readFileSync(importedModelsPath, 'utf8'));
+      if (Array.isArray(data)) {
+        // Drop entries whose file no longer exists, so the dropdown stays honest.
+        return data.filter((m) => m && m.path && fs.existsSync(m.path));
+      }
+    }
+  } catch (err) { /* ignore */ }
+  return [];
+});
+
+ipcMain.handle('save-imported-models', async (event, models) => {
+  try {
+    if (!Array.isArray(models)) return false;
+    fs.writeFileSync(importedModelsPath, JSON.stringify(models, null, 2), 'utf8');
+    return true;
+  } catch (err) {
+    return false;
+  }
+});
+
+// ---- Work assistant: document context, chat sessions, Markdown export ----
+// Everything stays on disk under userData. Nothing is uploaded anywhere.
+const chatSessionsPath = path.join(app.getPath('userData'), 'chat-sessions.json');
+
+// Document parsing lives in document.js so PDF / Word / Excel / PowerPoint /
+// text files all go through one local pipeline. Nothing is uploaded.
+const { parseDocument, TEXT_EXTS: DOC_TEXT_EXTS } = require('./document');
+const CONTEXT_TEXT_EXTS = Array.from(DOC_TEXT_EXTS).concat(['pdf', 'docx', 'xlsx', 'xls', 'pptx']);
+const MAX_CONTEXT_CHARS = 32000;
+
+ipcMain.handle('pick-context-files', async () => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: '选择要加入对话的文件（可多选）',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: '文档 / 表格 / 代码', extensions: CONTEXT_TEXT_EXTS },
+        { name: '所有文件', extensions: ['*'] },
+      ],
+    });
+    if (canceled || !filePaths || !filePaths.length) return { ok: false, canceled: true };
+    return {
+      ok: true,
+      files: filePaths.map((p) => ({ name: path.basename(p), path: p })),
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Every file is parsed independently: one bad file never blocks the batch.
+// Reading is confirmed up front — the work assistant can call this with paths
+// the model picked, so it must meet the same bar as read_file (default Cancel).
+ipcMain.handle('read-context-files', async (event, filePaths) => {
+  const paths = filePaths || [];
+  if (!paths.length) return { ok: true, files: [] };
+  const names = paths.slice(0, 8).map((p) => '· ' + path.basename(String(p)));
+  if (paths.length > 8) names.push('…（共 ' + paths.length + ' 个文件）');
+  const confirm = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['确认读取', '取消'],
+    defaultId: 1,
+    cancelId: 1,
+    title: 'ModelLodge · 读取文件确认',
+    message: '将读取 ' + paths.length + ' 个文件加入对话上下文',
+    detail: names.join('\n') + '\n\n内容只在本机解析；若开启联网搜索，请勿把文件内容写进搜索词。',
+  });
+  if (confirm.response !== 0) return { ok: false, canceled: true };
+  const files = [];
+  let budget = MAX_CONTEXT_CHARS;
+  for (const p of paths) {
+    const parsed = await parseDocument(p);
+    if (!parsed.ok) {
+      files.push({ name: path.basename(p), path: p, content: '', error: parsed.error });
+      continue;
+    }
+    let content = parsed.text || '';
+    let truncated = !!parsed.truncated;
+    if (content.length > budget) {
+      content = content.slice(0, budget);
+      truncated = true;
+    }
+    budget -= content.length;
+    files.push({ name: parsed.name, path: p, content, truncated, type: parsed.type });
+    if (budget <= 0) break;
+  }
+  return { ok: true, files };
+});
+
+ipcMain.handle('load-chat-sessions', async () => {
+  try {
+    if (fs.existsSync(chatSessionsPath)) {
+      const data = JSON.parse(fs.readFileSync(chatSessionsPath, 'utf8'));
+      if (data && Array.isArray(data.sessions)) {
+        return { ok: true, sessions: data.sessions, activeId: data.activeId || null };
+      }
+    }
+  } catch (err) { /* corrupt file: start fresh */ }
+  return { ok: true, sessions: [], activeId: null };
+});
+
+ipcMain.handle('save-chat-sessions', async (event, payload) => {
+  try {
+    if (!payload || !Array.isArray(payload.sessions)) return false;
+    const data = {
+      activeId: payload.activeId || null,
+      sessions: payload.sessions.slice(0, 100),
+    };
+    fs.writeFileSync(chatSessionsPath, JSON.stringify(data), 'utf8');
+    return true;
+  } catch (err) {
+    return false;
+  }
+});
+
+ipcMain.handle('export-chat-md', async (event, content, suggestedName) => {
+  try {
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: '导出对话记录',
+      defaultPath: suggestedName || 'ModelLodge-对话.md',
+      filters: [
+        { name: 'Markdown', extensions: ['md'] },
+        { name: '纯文本', extensions: ['txt'] },
+      ],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    fs.writeFileSync(filePath, content || '', 'utf8');
+    return { ok: true, path: filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// ---- Curated software catalogue + controlled computer actions ----
+const { executeAction } = require('./actions');
+const { listSoftware } = require('./software-catalog');
+
+ipcMain.handle('software-list', async (event, query) => ({ ok: true, items: listSoftware(query) }));
+
+ipcMain.handle('assistant-action', async (event, key, param, opts) => {
+  try {
+    // All actions — including download_software — go through executeAction,
+    // which enforces native confirmation for writes, scripts and downloads.
+    // Never special-case a download here: that would bypass the confirmation.
+    const wrapped = {
+      ...(opts || {}),
+      onProgress: (progress) => {
+        try { if (!event.sender.isDestroyed()) event.sender.send('download-progress', progress); } catch (_) {}
+      },
+      onDone: (data) => {
+        try { if (!event.sender.isDestroyed()) event.sender.send('software-download-done', data); } catch (_) {}
+      },
+    };
+    return await executeAction(key, param, mainWindow, wrapped);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 // ---- Export models to CSV ----
 ipcMain.handle('export-csv', async (event, rows) => {
   try {
@@ -457,16 +693,80 @@ ipcMain.handle('open-external', async (event, url) => {
 
 // ---- Model downloader (Hugging Face) ----
 const downloader = require('./downloader');
-const { downloadFile, searchModels, getModelFiles, cancelDownload, pauseDownload, resumeDownload, setHfToken, setProxy, testMirrorSpeed } = downloader;
+const chat = require('./chat');
+const engine = require('./engine');
+const websearch = require('./websearch');
+const { downloadFile, searchModels, getModelFiles, getModelDetail, getReadme, buildDownloadOptions, cancelDownload, pauseDownload, resumeDownload, setHfToken, setProxy: setDownloaderProxy, testMirrorSpeed } = downloader;
+// Apply proxy to both the downloader and web search in one place.
+function setProxy(url) {
+  setDownloaderProxy(url);
+  try { websearch.setProxy(url); } catch (e) { /* ignore */ }
+}
 
 ipcMain.handle('hf-search', async (event, query, source, typeFilter) => {
   try {
-    const models = await searchModels(query, source, 30, typeFilter || '');
-    return { ok: true, models };
+    const models = await searchModels(query, source, 40, typeFilter || '');
+    // Gated repos are never silently swapped for same-named ModelScope repos:
+    // those are often unrelated community uploads. Surface the requirement.
+    const gatedHint = source !== 'ms' && /(llama|gemma|mistral|nous-hermes)/i.test(query || '')
+      ? '若目标是 Hugging Face 上的受限（gated）模型，需要在设置里保存 HF Token 并先在网页接受许可；软件不会自动改用魔搭同名仓库。'
+      : '';
+    return { ok: true, models, gatedHint };
   } catch (err) {
     logger.error('hf-search failed', err);
     return { ok: false, error: err.message || String(err) };
   }
+});
+
+// Model detail page: description, params, license, README.
+ipcMain.handle('model-detail', async (event, repoId, source, revision) => {
+  try {
+    const detail = await getModelDetail(repoId, source, revision);
+    return { ok: true, detail };
+  } catch (err) {
+    logger.error('model-detail failed', err);
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('model-readme', async (event, repoId, source, revision) => {
+  try {
+    const text = await getReadme(repoId, source, revision);
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+// Download options for a repo: one entry per quantization (shards merged).
+ipcMain.handle('model-options', async (event, repoId, source, revision) => {
+  try {
+    const files = await getModelFiles(repoId, source, revision);
+    const { options, otherFiles } = buildDownloadOptions(files);
+    return { ok: true, options, otherFiles, files };
+  } catch (err) {
+    logger.error('model-options failed', err);
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+// One round trip for the model page: metadata + download options.
+// README is deliberately NOT included here — the raw README endpoint is slow
+// on CN mirrors and would block the quantization list the user actually wants.
+ipcMain.handle('model-page', async (event, repoId, source, revision) => {
+  const out = { ok: true, detail: null, options: [], otherFiles: [] };
+  const jobs = [
+    getModelDetail(repoId, source, revision).then((d) => { out.detail = d; }).catch((e) => { out.detailError = e.message; }),
+    getModelFiles(repoId, source, revision)
+      .then((files) => {
+        const r = buildDownloadOptions(files);
+        out.options = r.options;
+        out.otherFiles = r.otherFiles;
+      })
+      .catch((e) => { out.optionsError = e.message; }),
+  ];
+  await Promise.all(jobs);
+  return out;
 });
 
 ipcMain.handle('hf-files', async (event, repoId, source, revision) => {
@@ -480,12 +780,14 @@ ipcMain.handle('hf-files', async (event, repoId, source, revision) => {
 });
 
 ipcMain.handle('download-start', async (event, task) => {
-  // task: { id, repoId, file, destDir, sourceKey }
+  // task: { id, repoId, file/files, destDir, sourceKey }
   if (!task.conflict) task.conflict = appSettings.conflict || 'skip';
   try {
     const result = await downloadFile(task, (progress) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('download-progress', progress);
+      // Send to the window that started the download (not necessarily the main one).
+      const target = event.sender;
+      if (target && !target.isDestroyed()) {
+        target.send('download-progress', progress);
       }
     });
     return result;
@@ -515,8 +817,9 @@ ipcMain.handle('download-url', async (event, task) => {
   if (!task.conflict) task.conflict = appSettings.conflict || 'skip';
   try {
     const result = await downloadFile(task, (progress) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('download-progress', progress);
+      const target = event.sender;
+      if (target && !target.isDestroyed()) {
+        target.send('download-progress', progress);
       }
     });
     return result;
@@ -574,8 +877,23 @@ ipcMain.handle('file-sha256', async (event, filePath) => {
     if (!fs.existsSync(filePath)) return { ok: false, error: 'file not found' };
     const crypto = require('crypto');
     const hash = crypto.createHash('sha256');
+    const total = fs.statSync(filePath).size;
     const stream = fs.createReadStream(filePath);
-    for await (const chunk of stream) hash.update(chunk);
+    const started = Date.now();
+    let done = 0;
+    let lastSent = 0;
+    for await (const chunk of stream) {
+      hash.update(chunk);
+      done += chunk.length;
+      // Throttle events to ~100ms; big GGUFs can be tens of GB.
+      if (Date.now() - lastSent > 100 && mainWindow) {
+        lastSent = Date.now();
+        const pct = total ? done / total : 0;
+        const eta = pct > 0 ? Math.round((Date.now() - started) * (1 - pct) / pct / 1000) : -1;
+        emitFileProgress({ kind: 'sha256', name: path.basename(filePath), pct, done, total, eta });
+      }
+    }
+    emitFileProgress({ kind: 'sha256', name: path.basename(filePath), pct: 1, done: total, total, eta: 0 });
     return { ok: true, sha256: hash.digest('hex') };
   } catch (err) {
     return { ok: false, error: err.message || String(err) };
@@ -591,8 +909,19 @@ try {
 if (appSettings.scanDepth && appSettings.scanDepth >= 1 && appSettings.scanDepth <= 20) {
   scanDepth = appSettings.scanDepth;
 }
+if (typeof appSettings.scanExcludes === 'string' && appSettings.scanExcludes.trim()) {
+  scanExcludes = DEFAULT_SCAN_EXCLUDES.concat(
+    appSettings.scanExcludes.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean)
+  );
+}
 
-ipcMain.handle('load-settings', async () => ({ scanDepth, proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip', concurrent: appSettings.concurrent || 2, theme: appSettings.theme || 'light' }));
+ipcMain.handle('load-settings', async () => ({
+  scanDepth,
+  scanExcludes: scanExcludes.join(', '),
+  backendPreference: appSettings.backendPreference || 'auto',
+  proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip',
+  concurrent: appSettings.concurrent || 2, theme: appSettings.theme || 'light',
+}));
 
 ipcMain.handle('save-settings', async (event, settings) => {
   try {
@@ -600,6 +929,14 @@ ipcMain.handle('save-settings', async (event, settings) => {
     if (settings.scanDepth >= 1 && settings.scanDepth <= 20) {
       scanDepth = settings.scanDepth;
       appSettings.scanDepth = scanDepth;
+    }
+    if (typeof settings.scanExcludes === 'string') {
+      const extra = settings.scanExcludes.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean);
+      scanExcludes = DEFAULT_SCAN_EXCLUDES.concat(extra);
+      appSettings.scanExcludes = settings.scanExcludes;
+    }
+    if (['auto', 'cuda', 'vulkan', 'cpu'].includes(settings.backendPreference)) {
+      appSettings.backendPreference = settings.backendPreference;
     }
     if (typeof settings.proxy === 'string') {
       appSettings.proxy = settings.proxy.trim();
@@ -850,15 +1187,39 @@ ipcMain.handle('move-model-files', async (event, filePaths, targetDir) => {
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
     const moved = [];
     const errors = [];
-    for (const src of filePaths) {
+    for (let idx = 0; idx < filePaths.length; idx++) {
+      const src = filePaths[idx];
+      const name = path.basename(src);
+      const dest = path.join(targetDir, name);
       try {
-        const dest = path.join(targetDir, path.basename(src));
-        if (fs.existsSync(dest)) { errors.push(path.basename(src) + ': target exists'); continue; }
-        fs.renameSync(src, dest); // same volume fast; cross-volume falls back below
+        if (fs.existsSync(dest)) { errors.push(name + ': target exists'); continue; }
+        try {
+          fs.renameSync(src, dest); // same volume: instant
+        } catch (e) {
+          // Cross-volume: streamed copy with progress, then remove the source.
+          const total = fs.statSync(src).size;
+          const read = fs.createReadStream(src);
+          const write = fs.createWriteStream(dest);
+          const started = Date.now();
+          let done = 0;
+          let lastSent = 0;
+          for await (const chunk of read) {
+            if (!write.write(chunk)) await new Promise((r) => write.once('drain', r));
+            done += chunk.length;
+            if (Date.now() - lastSent > 120 && mainWindow) {
+              lastSent = Date.now();
+              const pct = total ? done / total : 0;
+              const eta = pct > 0 ? Math.round((Date.now() - started) * (1 - pct) / pct / 1000) : -1;
+              emitFileProgress({ kind: 'move', name: name + ' (' + (idx + 1) + '/' + filePaths.length + ')', pct, done, total, eta });
+            }
+          }
+          await new Promise((resolve, reject) => { write.end(resolve); write.once('error', reject); });
+          fs.unlinkSync(src);
+        }
+        emitFileProgress({ kind: 'move', name, pct: 1, done: 1, total: 1, eta: 0 });
         moved.push(dest);
       } catch (e) {
-        try { fs.copyFileSync(src, path.join(targetDir, path.basename(src))); fs.unlinkSync(src); moved.push(path.join(targetDir, path.basename(src))); }
-        catch (e2) { errors.push(path.basename(src) + ': ' + e2.message); }
+        errors.push(name + ': ' + e.message);
       }
     }
     return { ok: true, moved, errors };
@@ -887,22 +1248,38 @@ ipcMain.handle('detect-runtimes', async () => {
   const home = app.getPath('home');
   const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
   const out = [];
-  // Ollama
-  const ollama = findExecutable('ollama', [path.join(local, 'Programs', 'Ollama')]);
-  out.push({ key: 'ollama', name: 'Ollama', exe: ollama || '', found: !!ollama, hint: 'https://ollama.com/download' });
-  // llama.cpp (llama-server / llama-cli)
-  const llamaServer = findExecutable('llama-server', [
-    path.join(home, 'llama.cpp', 'build', 'bin', 'Release'),
-    path.join(local, 'Programs', 'llama.cpp'),
+  // Ollama — distinguish "installed" from "service running".
+  const ollama = findExecutable('ollama', [
+    path.join(local, 'Programs', 'Ollama'),
+    path.join(home, '.ollama', 'bin'),
+    'C:\\Program Files\\Ollama',
   ]);
-  out.push({ key: 'llamacpp', name: 'llama.cpp', exe: llamaServer || '', found: !!llamaServer, hint: 'https://github.com/ggml-org/llama.cpp' });
-  // LM Studio
-  const lmCandidates = [
-    path.join(local, 'Programs', 'LM Studio', 'LM Studio.exe'),
-    path.join(local, 'LM Studio', 'LM Studio.exe'),
-    'C://Program Files\\LM Studio\\LM Studio.exe',
-  ];
-  const lm = lmCandidates.find(p => { try { return fs.existsSync(p); } catch (_) { return false; } });
+  let ollamaRunning = false;
+  try {
+    const bl = await chat.detectBackends();
+    const ob = bl.find((b) => b.key === 'ollama');
+    ollamaRunning = !!(ob && ob.online);
+  } catch (e) { /* ignore */ }
+  out.push({
+    key: 'ollama', name: 'Ollama', exe: ollama || '', found: !!ollama,
+    running: ollamaRunning, hint: 'https://ollama.com/download',
+  });
+  // llama.cpp — the bundled engine counts as found.
+  const eng = engine.detectEngines();
+  const llamaServer = eng.bundled
+    ? path.join(eng.bundled, 'llama-server.exe')
+    : findExecutable('llama-server', [
+      path.join(home, 'llama.cpp', 'build', 'bin', 'Release'),
+      path.join(local, 'Programs', 'llama.cpp'),
+    ]);
+  out.push({
+    key: 'llamacpp', name: 'llama.cpp', exe: llamaServer || '', found: !!llamaServer,
+    running: engine.engineStatus().running, bundled: !!eng.bundled, vulkan: eng.vulkan,
+    hint: 'https://github.com/ggml-org/llama.cpp',
+  });
+  // LM Studio — may live in a custom directory; chat.findLmStudio() checks
+  // the standard paths plus the registry.
+  const lm = chat.findLmStudio();
   out.push({ key: 'lmstudio', name: 'LM Studio', exe: lm || '', found: !!lm, hint: 'https://lmstudio.ai/download' });
   return out;
 });
@@ -954,4 +1331,365 @@ ipcMain.handle('launch-model', async (event, runtime, modelPath, opts) => {
     child.unref();
     return { ok: true, pid: child.pid, exe, args };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// What runtimes are usable? Reports bundled engine + installed external apps.
+ipcMain.handle('engine-detect', async () => {
+  try {
+    const e = await engine.detectEngines();
+    return {
+      ok: true,
+      engine: {
+        bundled: !!e.bundled,
+        bundledPath: e.bundled || '',
+        vulkan: e.vulkan,
+        nvidia: e.nvidia,
+        cuda: e.cuda,
+        cudaCount: e.cudaCount || 0,
+        cudaBackends: e.cudaBackends || [],
+        externalCount: e.external.length,
+        source: e.source,
+      },
+      status: engine.engineStatus(),
+    };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Suggest conservative runtime parameters from VRAM + model size.
+ipcMain.handle('engine-suggest', async (event, modelBytes, vramMB, freeMB) => {
+  const vramBytes = (Number(vramMB) || 0) * 1024 * 1024;
+  const freeBytes = (Number(freeMB) || 0) * 1024 * 1024;
+  return {
+    ok: true,
+    ctx: engine.defaultContext(Number(vramMB) || 0, freeBytes ? Number(freeMB) : 0),
+    gpuLayers: engine.suggestGpuLayers(Number(modelBytes) || 0, vramBytes, freeBytes),
+  };
+});
+
+// Live dedicated VRAM usage (NVIDIA). Used for the chat-page meter and
+// "spilling into shared memory" warning. Local only — no telemetry.
+ipcMain.handle('vram-usage', async () => {
+  try {
+    const { execFile } = require('child_process');
+    const out = await new Promise((resolve) => {
+      execFile('nvidia-smi', [
+        '--query-gpu=name,memory.used,memory.free,memory.total,utilization.gpu',
+        '--format=csv,noheader,nounits',
+      ], { timeout: 5000, windowsHide: true, encoding: 'utf8' },
+        (err, stdout) => resolve(err ? '' : (stdout || '')));
+    });
+    const gpus = [];
+    for (const line of String(out).split(/\r?\n/)) {
+      const p = line.split(',').map((s) => s.trim());
+      if (p.length < 4) continue;
+      const usedMB = parseFloat(p[1]);
+      const freeMB = parseFloat(p[2]);
+      const totalMB = parseFloat(p[3]);
+      if (!isFinite(totalMB) || totalMB <= 0) continue;
+      gpus.push({ name: p[0], usedMB: usedMB || 0, freeMB: freeMB || 0, totalMB, util: parseFloat(p[4]) || 0 });
+    }
+    return { ok: true, gpus };
+  } catch (e) {
+    return { ok: false, gpus: [], error: e.message };
+  }
+});
+
+// Bundle local logs + non-secret settings into a zip on the Desktop.
+ipcMain.handle('export-diagnostics', async () => {
+  try {
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    const logDir = logger.getLogDir();
+    if (fs.existsSync(logDir)) {
+      for (const name of fs.readdirSync(logDir)) {
+        const p = path.join(logDir, name);
+        try { if (fs.statSync(p).isFile()) zip.addLocalFile(p, 'logs'); } catch (_) {}
+      }
+    }
+    for (const name of ['settings.json', 'folders.json', 'imported-models.json', 'chat-sessions.json']) {
+      const p = path.join(app.getPath('userData'), name);
+      try { if (fs.existsSync(p)) zip.addLocalFile(p, 'config'); } catch (_) {}
+    }
+    zip.addFile('README.txt', Buffer.from(
+      'ModelLodge diagnostics bundle\n' +
+      'Logs and non-secret configuration only. Tokens/secrets are NOT included.\n' +
+      'Generated: ' + new Date().toISOString() + '\n', 'utf8'));
+    const dest = path.join(app.getPath('desktop'), 'ModelLodge-diagnostics-' + Date.now() + '.zip');
+    zip.writeZip(dest);
+    return { ok: true, path: dest };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Remove stale engine caches the app itself created in userData / temp.
+// The live engine under resources/llama is never touched.
+ipcMain.handle('clean-old-engines', async () => {
+  const candidates = [];
+  const scan = (root) => {
+    try {
+      if (!fs.existsSync(root)) return;
+      for (const name of fs.readdirSync(root)) {
+        if (!/^(llama|engine|modellodge-engine)/i.test(name)) continue;
+        const p = path.join(root, name);
+        let st;
+        try { st = fs.statSync(p); } catch (_) { continue; }
+        if (!st.isDirectory()) continue;
+        let bytes = 0;
+        const walk = (d) => {
+          try {
+            for (const n of fs.readdirSync(d)) {
+              const f = path.join(d, n);
+              const s = fs.statSync(f);
+              bytes += s.isDirectory() ? walk(f) : s.size;
+            }
+          } catch (_) {}
+          return bytes;
+        };
+        walk(p);
+        candidates.push({ path: p, bytes });
+      }
+    } catch (_) {}
+  };
+  scan(app.getPath('userData'));
+  // Also handle engine caches named modellodge-engine-* in the temp root.
+  try {
+    for (const name of fs.readdirSync(os.tmpdir())) {
+      if (/^modellodge-engine-/i.test(name)) {
+        const p = path.join(os.tmpdir(), name);
+        if (fs.statSync(p).isDirectory() && !candidates.some((c) => c.path === p)) {
+          let bytes = 0;
+          const walk = (d) => { for (const n of fs.readdirSync(d)) { const f = path.join(d, n); const s = fs.statSync(f); bytes += s.isDirectory() ? walk(f) : s.size; } return bytes; };
+          try { bytes = walk(p); } catch (_) {}
+          candidates.push({ path: p, bytes });
+        }
+      }
+    }
+  } catch (_) {}
+  let freed = 0;
+  const removed = [];
+  for (const c of candidates) {
+    try { fs.rmSync(c.path, { recursive: true, force: true }); freed += c.bytes; removed.push(c.path); } catch (_) {}
+  }
+  return { ok: true, removed, freedBytes: freed };
+});
+
+// ---- Optional CUDA component pack ---------------------------------------
+// The main installer stays ~98 MB. Users who want CUDA on NVIDIA cards can
+// download the separate component zip and import it here; it is unpacked into
+// userData/cuda and the engine picks it up as the top-priority backend.
+const CUDA_PACK_DIR = () => path.join(app.getPath('userData'), 'cuda');
+
+// Open the public download page. The pack is ~713 MB, so let the browser /
+// download manager handle it rather than streaming it through the app.
+ipcMain.handle('cuda-pack-download', async () => {
+  try {
+    await shell.openExternal(CUDA_PACK_URL);
+    return { ok: true, url: CUDA_PACK_URL };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cuda-pack-status', async () => {
+  try {
+    const dir = CUDA_PACK_DIR();
+    const server = path.join(dir, 'llama-server.exe');
+    const cudaDll = fs.existsSync(path.join(dir, 'ggml-cuda.dll'));
+    let bytes = 0;
+    const walk = (d) => {
+      for (const n of fs.readdirSync(d)) {
+        const f = path.join(d, n);
+        const s = fs.statSync(f);
+        bytes += s.isDirectory() ? walk(f) : s.size;
+      }
+      return bytes;
+    };
+    if (fs.existsSync(dir)) { try { bytes = walk(dir); } catch (_) {} }
+    const installed = fs.existsSync(server) && cudaDll;
+    const driverVersion = await engine.nvidiaDriverVersion();
+    return {
+      ok: true, installed, dir, bytes,
+      hasRuntime: engine.hasCudaRuntime(dir),
+      driverVersion,
+      driverWarning: engine.cudaDriverWarning(driverVersion),
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cuda-pack-import', async () => {
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      title: '选择 CUDA 组件包（zip）',
+      filters: [{ name: 'CUDA 组件包', extensions: ['zip'] }, { name: '所有文件', extensions: ['*'] }],
+      properties: ['openFile'],
+    });
+    if (canceled || !filePaths || !filePaths.length) return { ok: false, canceled: true };
+    const zipPath = filePaths[0];
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip(zipPath);
+    const entries = zip.getEntries();
+    if (!entries.length) return { ok: false, error: '组件包是空的' };
+    // SECURITY: reject path traversal entries before extracting anything.
+    for (const e of entries) {
+      const entryPath = e.entryName.split('/').join(path.sep);
+      const full = path.resolve(CUDA_PACK_DIR(), entryPath);
+      const rel = path.relative(CUDA_PACK_DIR(), full);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        return { ok: false, error: '组件包含有不安全的路径，已拒绝导入' };
+      }
+    }
+    const dir = CUDA_PACK_DIR();
+    const tmp = dir + '.tmp-' + Date.now();
+    fs.mkdirSync(tmp, { recursive: true });
+    zip.extractAllTo(tmp, true);
+    // Accept both layouts: files at zip root, or inside a single top folder.
+    let src = tmp;
+    const top = fs.readdirSync(tmp, { withFileTypes: true });
+    if (top.length === 1 && top[0].isDirectory() && !fs.existsSync(path.join(tmp, 'llama-server.exe'))) {
+      src = path.join(tmp, top[0].name);
+    }
+    if (!fs.existsSync(path.join(src, 'llama-server.exe')) || !fs.existsSync(path.join(src, 'ggml-cuda.dll'))) {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+      return { ok: false, error: '组件包缺少 llama-server.exe 或 ggml-cuda.dll，不是有效的 CUDA 组件包' };
+    }
+    // Runtime DLLs are mandatory: without cudart/cublasLt the server exits
+    // with 0xC0000135 even though the CUDA backend itself is present.
+    if (!engine.hasCudaRuntime(src)) {
+      try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+      return { ok: false, error: '组件包缺少 CUDA 运行时 DLL（cudart/cublas/cublasLt），无法启动 CUDA' };
+    }
+    if (fs.existsSync(dir)) {
+      const backup = dir + '.old-' + Date.now();
+      try { fs.renameSync(dir, backup); } catch (_) {}
+    }
+    fs.renameSync(src, dir);
+    if (src !== tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {} }
+    return { ok: true, dir, message: 'CUDA 组件包已安装，重启软件后生效' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cuda-pack-remove', async () => {
+  try {
+    const dir = CUDA_PACK_DIR();
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Start the built-in engine on a GGUF file.
+ipcMain.handle('engine-start', async (event, modelPath, opts) => {
+  try {
+    return await engine.startEngine(modelPath, opts || {});
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('engine-stop', async () => {
+  try {
+    return engine.stopEngine();
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Optional web search for chat. Only called when the user enables the toggle.
+ipcMain.handle('web-search', async (event, query) => {
+  try {
+    const r = await websearch.searchWeb(query);
+    if (r.ok) r.context = websearch.buildContextMessage(r.results, query);
+    return r;
+  } catch (err) {
+    return { ok: false, results: [], error: err.message || String(err) };
+  }
+});
+
+// Abort an in-flight generation. The renderer passes the request id it created
+// when sending; we destroy the real socket so the GPU stops working immediately.
+ipcMain.handle('engine-abort', async (event, reqId) => {
+  try {
+    return { ok: engine.abortChat(reqId) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+ipcMain.handle('chat-abort', async (event, reqId) => {
+  try {
+    return { ok: chat.abortChat(reqId) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Chat against the built-in engine (llama.cpp OpenAI-compatible endpoint).
+ipcMain.handle('engine-chat', async (event, messages, opts) => {
+  const sender = event.sender;
+  try {
+    const st = engine.engineStatus();
+    if (!st.running) return { ok: false, error: '引擎未运行' };
+    const result = await engine.streamChat(st.port, messages, (delta) => {
+      if (!sender.isDestroyed()) sender.send('chat-delta', { delta });
+    }, opts || {});
+    return { ok: true, content: result.content, aborted: !!result.aborted };
+  } catch (err) {
+    logger.error('engine-chat failed', err);
+    return { ok: false, error: err.message || String(err) };
+  }
+});
+
+// Start the Ollama service if it is installed but not running.
+ipcMain.handle('chat-start-ollama', async () => {
+  try {
+    return await chat.startOllamaService();
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('chat-start-lmstudio', async (event, port) => {
+  try {
+    return await chat.startLmStudioService(port);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('chat-detect', async () => {
+  try {
+    const backends = await chat.detectBackends();
+    return { ok: true, backends };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('chat-start-llama', async (event, modelPath, opts) => {
+  try {
+    return await chat.startLlamaServer(modelPath, opts);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Streaming chat: deltas are pushed to the renderer as 'chat-delta' events.
+ipcMain.handle('chat-send', async (event, backendKey, modelName, messages, opts) => {
+  const sender = event.sender;
+  try {
+    const result = await chat.streamChat(backendKey, modelName, messages, (delta) => {
+      if (!sender.isDestroyed()) sender.send('chat-delta', { delta });
+    }, opts);
+    return { ok: true, content: result.content, aborted: !!result.aborted };
+  } catch (err) {
+    logger.error('chat-send failed', err);
+    return { ok: false, error: err.message || String(err) };
+  }
 });
