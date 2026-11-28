@@ -71,7 +71,17 @@ const el = {
   settingsProxy: document.getElementById('settings-proxy'),
   settingsConflict: document.getElementById('settings-conflict'),
   settingsConcurrent: document.getElementById('settings-concurrent'),
+  settingsThreads: document.getElementById('settings-threads'),
   settingsMirrorResult: document.getElementById('settings-mirror-result'),
+  apiEnabled: document.getElementById('api-enabled'),
+  apiLan: document.getElementById('api-lan'),
+  apiPort: document.getElementById('api-port'),
+  apiToken: document.getElementById('api-token'),
+  apiStatus: document.getElementById('api-status'),
+  apiUrls: document.getElementById('api-urls'),
+  btnModelCheck: document.getElementById('btn-model-check'),
+  modelCheckBadge: document.getElementById('model-check-badge'),
+  modelCheckReport: document.getElementById('model-check-report'),
   settingsResetNotes: document.getElementById('settings-reset-notes'),
   libraryView: document.getElementById('library-view'),
   downloadView: document.getElementById('download-view'),
@@ -937,6 +947,7 @@ async function openSettings() {
     el.settingsProxy.value = settings.proxy || '';
     el.settingsConflict.value = settings.conflict || 'skip';
     el.settingsConcurrent.value = String(settings.concurrent || 2);
+    if (el.settingsThreads) el.settingsThreads.value = String(settings.downloadThreads || 8);
     maxConcurrent = settings.concurrent || 2;
     const theme = settings.theme || 'light';
     document.getElementById('settings-theme').value = theme;
@@ -950,7 +961,74 @@ async function openSettings() {
     document.getElementById('col-ctx').checked = state.cols.ctx !== false;
     document.getElementById('col-params').checked = state.cols.params !== false;
   } catch (e) { /* keep default */ }
+  refreshApiStatus();
   el.settingsModal.classList.remove('hidden');
+}
+
+// ---- API server UI ----
+async function refreshApiStatus() {
+  if (!ML.apiServerStatus || !el.apiStatus) return;
+  try {
+    const s = await ML.apiServerStatus();
+    if (!s || !s.ok) { el.apiStatus.textContent = '状态读取失败'; return; }
+    el.apiEnabled.checked = !!s.enabled;
+    el.apiLan.checked = !!s.lan;
+    el.apiPort.value = String(s.port || 1234);
+    el.apiToken.textContent = s.token || '-';
+    let txt = s.running ? '● 运行中' : '○ 已停止';
+    if (s.error) txt += ' · ' + s.error;
+    el.apiStatus.textContent = txt;
+    el.apiUrls.innerHTML = '';
+    if (s.running) {
+      const add = (label, url) => {
+        const d = document.createElement('div');
+        d.className = 'api-url-line';
+        d.innerHTML = '<span class="cmd-hint">' + esc(label) + '</span><code>' + esc(url) + '</code>';
+        el.apiUrls.appendChild(d);
+      };
+      add('本机', s.localUrl + '/v1');
+      (s.lanUrls || []).forEach((u) => add('局域网', u + '/chat'));
+    }
+  } catch (e) { el.apiStatus.textContent = '状态读取失败: ' + e.message; }
+}
+
+if (document.getElementById('api-save')) {
+  document.getElementById('api-save').addEventListener('click', async () => {
+    const cfg = {
+      enabled: el.apiEnabled.checked,
+      lan: el.apiLan.checked,
+      port: Number(el.apiPort.value),
+    };
+    try {
+      const r = await ML.apiServerConfigure(cfg);
+      if (r && r.ok) {
+        showToast(cfg.enabled ? 'API 服务器已启动' : 'API 服务器已关闭');
+        await refreshApiStatus();
+      } else {
+        showToast('启动失败：' + ((r && r.error) || '未知错误'));
+        await refreshApiStatus();
+      }
+    } catch (e) { showToast('保存失败: ' + e.message); }
+  });
+}
+if (document.getElementById('api-regen')) {
+  document.getElementById('api-regen').addEventListener('click', async () => {
+    try {
+      const r = await ML.apiServerTokenRegenerate();
+      if (r && r.ok) { el.apiToken.textContent = r.token; showToast('令牌已重置，旧令牌立即失效'); await refreshApiStatus(); }
+    } catch (e) { showToast('重置失败: ' + e.message); }
+  });
+}
+if (document.getElementById('api-copy')) {
+  document.getElementById('api-copy').addEventListener('click', async () => {
+    try {
+      const s = await ML.apiServerStatus();
+      const url = (s.lanUrls && s.lanUrls[0]) || s.localUrl;
+      const text = '地址: ' + url + '/v1\n令牌: ' + s.token;
+      if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(text);
+      showToast('地址和令牌已复制');
+    } catch (e) { showToast('复制失败: ' + e.message); }
+  });
 }
 
 document.getElementById('settings-save-cols').addEventListener('click', async () => {
@@ -972,6 +1050,7 @@ document.getElementById('settings-save-network').addEventListener('click', async
   settings.proxy = el.settingsProxy.value.trim();
   settings.conflict = el.settingsConflict.value;
   settings.concurrent = Number(el.settingsConcurrent.value);
+  settings.downloadThreads = el.settingsThreads ? Number(el.settingsThreads.value) : 8;
   maxConcurrent = settings.concurrent;
   const ok = await ML.saveSettings(settings);
   pumpDownloadQueue();
@@ -2183,12 +2262,18 @@ async function refreshEngineStatus() {
       const nvidia = !!r.engine.nvidia;
       const usingVulkan = chatState.runningBackend === 'vulkan';
       const noCuda = nvidia && !(r.engine.cudaCount > 0);
-      const show = nvidia && (usingVulkan || noCuda);
+      const driverWarn = r.engine.cudaDriverWarning || '';
+      const driverOld = /过旧/.test(driverWarn);
+      const show = nvidia && (usingVulkan || noCuda || driverOld);
       el.chatCudaHint.classList.toggle('hidden', !show);
       if (show) {
-        el.chatCudaHint.textContent = noCuda
-          ? '你的 NVIDIA 显卡未检测到 CUDA 后端，当前只能走 Vulkan —— 通常不如 CUDA 快。'
-          : '当前引擎走 Vulkan；NVIDIA 显卡用 CUDA 通常更快，可在「加速后端」里切换。';
+        if (driverOld) {
+          el.chatCudaHint.textContent = driverWarn + '。当前走 Vulkan / CPU —— 这是正常的，不是显存不足。升级驱动后即可用 CUDA。';
+        } else {
+          el.chatCudaHint.textContent = noCuda
+            ? '你的 NVIDIA 显卡未检测到 CUDA 后端，当前只能走 Vulkan —— 通常不如 CUDA 快。'
+            : '当前引擎走 Vulkan；NVIDIA 显卡用 CUDA 通常更快，可在「加速后端」里切换。';
+        }
       }
     }
   } catch (e) { /* ignore */ }
@@ -2291,9 +2376,31 @@ function renderLocalModelLauncher() {
 // Resolve engine settings for this model: auto -ngl from VRAM, adaptive ctx,
 // and the user's backend preference (auto | cuda | vulkan | cpu).
 async function runtimeOptsFor(model) {
+  // If this model has a verified profile from the health check, apply it
+  // silently. Explicit user edits (dataset.touched) always win.
+  let profile = null;
+  try { if (ML.modelProfileGet && model && model.path) {
+    const pr = await ML.modelProfileGet(model.path);
+    if (pr && pr.ok && pr.profile) profile = pr.profile;
+  } } catch (_) {}
+  if (el.modelCheckBadge) el.modelCheckBadge.classList.toggle('hidden', !profile);
+
   const gpu = discreteGpu() || state.gpus[0];
-  let ctx = Number(el.chatCtx.value) || 4096;
-  let gpuLayers = 0;
+  let ctx = profile && profile.ctx ? Number(profile.ctx) : (Number(el.chatCtx.value) || 4096);
+  let gpuLayers = profile ? (Number(profile.gpuLayers) || 0) : 0;
+  if (profile && profile.backendPreference && el.chatBackendPref && !el.chatBackendPref.dataset.touched) {
+    el.chatBackendPref.value = profile.backendPreference;
+  }
+  if (profile && profile.ctx && el.chatCtx && !el.chatCtx.dataset.touched) {
+    el.chatCtx.value = String(profile.ctx);
+  }
+  if (profile) {
+    return {
+      ctx, gpuLayers,
+      backendPreference: (el.chatBackendPref && el.chatBackendPref.value) || profile.backendPreference || 'auto',
+      timeout: 300000,
+    };
+  }
   // Use the CURRENT free VRAM, not the card's nominal size: another app may
   // already be holding several GB, which is exactly what causes lazy OOM.
   let freeMB = 0;
@@ -2329,10 +2436,89 @@ async function runtimeOptsFor(model) {
 // Turn a raw CUDA OOM from llama-server into an actionable Chinese message.
 function friendlyEngineError(err) {
   const raw = String((err && err.message) || err || '');
+  const prefix = t('chat.error');
   if (/cudaMalloc failed|out of memory|failed to allocate CUDA|failed to allocate buffer/i.test(raw)) {
-    return t('chat.error') + '显存不足：GPU 加载模型时分配失败。软件已自动逐级降低卸载层数与上下文重试；若仍失败，请把「GPU 卸载层数」调低或切到 CPU / Vulkan，并关闭其他占用显存的程序。';
+    // cudaMalloc "out of memory" with a *free* GPU is almost always a stuck
+    // backend process (stale CUDA context), not real VRAM exhaustion. The
+    // in-app engine self-heals via its OOM ladder; external backends (Ollama /
+    // LM Studio) cannot, so tell the user to restart that backend instead of
+    // sending them to lower layers / close programs pointlessly.
+    const isExternal = !!(chatState.backend && chatState.backend !== 'builtin');
+    const drv = (chatState.engineInfo && chatState.engineInfo.driverVersion) || '';
+    if (isExternal) {
+      const bname = (chatState.backends || []).find((b) => b.key === chatState.backend);
+      const label = bname ? bname.name : '外部后端';
+      return prefix + label + ' 的 CUDA 上下文卡住了：显存其实是空闲的，不是显存不足。请在下方「外部后端」里重启 ' + label + ' 后再发一次；若仍失败，重启电脑可彻底清理 CUDA 上下文。';
+    }
+    return prefix + 'GPU 分配显存失败：软件已自动逐级降低卸载层数与上下文重试。可把「GPU 卸载层数」调低、切到 CPU / Vulkan，或关闭其他占显存的程序。'
+      + (drv ? '（当前驱动 ' + drv + '）' : '');
   }
-  return t('chat.error') + raw;
+  return prefix + raw;
+}
+
+// ---- Model health check UI ----
+function currentChatModel() {
+  const p = chatState && chatState.model;
+  if (!p) return null;
+  const local = (chatState.localModels || []).find((m) => m.path === p);
+  if (local) return local;
+  return findModel(p) || { path: p, name: String(p).split(/[\\/]/).pop() };
+}
+let modelChecking = false;
+if (el.btnModelCheck) {
+  el.btnModelCheck.addEventListener('click', async () => {
+    if (modelChecking) {
+      try { await ML.modelCheckCancel(); } catch (_) {}
+      return;
+    }
+    const model = currentChatModel();
+    if (!model || !model.path) { showToast('请先选择一个模型'); return; }
+    modelChecking = true;
+    el.btnModelCheck.disabled = true;
+    el.btnModelCheck.textContent = '体检中...';
+    el.modelCheckReport.classList.remove('hidden');
+    el.modelCheckReport.textContent = '正在测试卸载层数与上下文，请稍候（大模型可能需要几分钟）...';
+    try {
+      if (ML.onModelCheckProgress) {
+        ML.onModelCheckProgress((p) => {
+          if (!p) return;
+          const label = p.phase === 'tier' ? ('测试 ' + p.ngl + ' 层（' + p.index + '/' + p.total + '）...')
+            : p.phase === 'tier-done' ? ('  ' + p.ngl + ' 层 → ' + (p.ok ? ('可生成 ' + (p.tps || 0) + ' tok/s') : '失败'))
+            : p.phase === 'done' ? '完成' : '';
+          if (label) el.modelCheckReport.textContent += '\n' + label;
+        });
+      }
+      const r = await ML.modelCheck(model.path, {
+        ctx: Number(el.chatCtx.value) || 4096,
+        backendPreference: el.chatBackendPref ? el.chatBackendPref.value : 'auto',
+        maxNgl: 99,
+      });
+      if (!r || !r.ok) { el.modelCheckReport.textContent = '体检失败：' + ((r && r.error) || '未知错误'); return; }
+      const rep = r.report;
+      const lines = ['【体检报告】' + (rep.name || '')];
+      (rep.tiers || []).forEach((t) => {
+        lines.push('  请求 ' + t.requested + ' 层 → 实际 ' + (t.actual ? t.actual.gpuLayers : '?') + ' 层 / ctx ' + (t.actual ? t.actual.ctx : '?')
+          + (t.ok ? ('  ✓ ' + (t.tps || 0) + ' tok/s') : '  ✗ 失败'));
+      });
+      lines.push(rep.message || '');
+      if (rep.ok && rep.profile && ML.modelProfileSave) {
+        await ML.modelProfileSave(model.path, rep.profile);
+        lines.push('已保存为这个模型的专属配置，下次加载自动套用。');
+        el.modelCheckBadge.classList.remove('hidden');
+        // Apply immediately to the visible controls.
+        if (el.chatCtx) el.chatCtx.value = String(rep.profile.ctx || 4096);
+        if (el.chatBackendPref) el.chatBackendPref.value = rep.profile.backendPreference || 'auto';
+      }
+      el.modelCheckReport.textContent = lines.join('\n');
+      showToast(rep.ok ? '体检完成，已套用最佳配置' : '体检完成，未找到可用配置');
+    } catch (e) {
+      el.modelCheckReport.textContent = '体检失败: ' + e.message;
+    } finally {
+      modelChecking = false;
+      el.btnModelCheck.disabled = false;
+      el.btnModelCheck.textContent = '模型体检';
+    }
+  });
 }
 
 async function launchEngineWith(model) {
@@ -2457,6 +2643,27 @@ function renderChatBackends() {
         renderChatModelSelect();
         el.chatStatus.textContent = t('chat.connected') + b.name + t('chat.modelCount') + b.models.length;
       });
+      // A stuck CUDA context shows up as "cudaMalloc failed" with free VRAM.
+      // Restarting the backend process is the fix, so expose it inline.
+      if ((b.key === 'ollama' || b.key === 'lmstudio') && ML.chatRestartOllama) {
+        const rb = document.createElement('button');
+        rb.className = 'link-btn chat-start-service backend-restart';
+        rb.textContent = '重启';
+        rb.title = '重启后端，清理卡住的 CUDA 上下文（显存空闲却报不足时有用）';
+        rb.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          rb.disabled = true;
+          rb.textContent = '重启中…';
+          try {
+            const r = b.key === 'ollama'
+              ? await ML.chatRestartOllama()
+              : await ML.chatStartLmStudio(b.port);
+            if (r.ok) { showToast('后端已重启'); await refreshChatBackends(); }
+            else { showToast(r.error || '重启失败'); rb.disabled = false; rb.textContent = '重启'; }
+          } catch (err) { showToast('重启失败：' + err.message); rb.disabled = false; rb.textContent = '重启'; }
+        });
+        div.appendChild(rb);
+      }
     } else if (b.installed && (b.key === 'ollama' || b.key === 'lmstudio') && b.canStartService) {
       // Installed but the API service is down — offer a one-click start.
       // For LM Studio this is essential: its GUI chat works while :1234 stays shut.
@@ -2566,8 +2773,11 @@ function appendChatMessage(role, content, isError) {
 
 // Make sure a model is loaded and ready before sending.
 async function ensureModelReady() {
-  if (chatState.backend) return true;          // external backend, already up
   const sel = el.chatModelSelect.value;
+  // A local GGUF needs the built-in engine up, regardless of any external
+  // backend that happens to be online (those bypass our driver/OOM gates).
+  const isLocalSel = (chatState.localModels || []).some((m) => m.path === sel);
+  if (!isLocalSel && chatState.backend) return true;   // external backend, already up
   if (!sel || sel === t('chat.noModel')) {
     showToast(t('chat.noBackend'));
     return false;
@@ -2877,8 +3087,14 @@ async function sendChatMessage() {
         };
         let r;
         try {
+          // A selected local GGUF must always go through the built-in engine:
+          // external backends have their own CUDA setup and bypass our driver
+          // gate + OOM ladder (that caused bogus "显存不足" on old drivers).
+          const isLocal = (chatState.localModels || []).some((m) => m.path === chatState.model);
           if (modelTransportOverride) {
             r = await modelTransportOverride(workingHistory, opts);
+          } else if (isLocal) {
+            r = await ML.engineChat(workingHistory, opts);
           } else if (chatState.backend) {
             r = await ML.chatSend(chatState.backend, chatState.model, workingHistory, opts);
           } else {
