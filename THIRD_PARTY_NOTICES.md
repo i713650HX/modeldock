@@ -132,6 +132,58 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ---
 
+## 四·补、llama.cpp 推理引擎（随软件分发）
+
+ModelLodge 内置了 [llama.cpp](https://github.com/ggml-org/llama.cpp) 的运行时，
+放在安装目录的 `resources\llama\` 下，用于在本机直接运行 GGUF 模型。
+其中包含 CPU 后端与 Vulkan 后端（`ggml-vulkan.dll`）。
+
+- 版本：llama.cpp b12811（build 12811, commit 00d5c142c），Windows x64 预编译包，来源为 ggml-org/llama.cpp 官方 GitHub Actions 构建产物（CPU + Vulkan）
+- 许可证：MIT License
+- 版权：Copyright (c) 2023-2024 The ggml authors
+- 随包分发的二进制 SHA256（发布前核对）：
+  - `llama-server.exe` — `a8ea7129882e77a29d014cfbb746092276b47fe2bdf04b7ffe5e6a5562d565e7`
+  - `ggml-vulkan.dll` — `8c1fcd1843baac17868743df1e1fc77fd1f4b8a3002b25f68dd4f3e8030496c8`
+
+**CUDA 后端说明（可选组件包）**：主安装包**不含** NVIDIA CUDA 二进制，体积保持在约 98 MB。需要 CUDA 加速的 NVIDIA 显卡用户可单独下载 `ModelLodge-CUDA12-Component.zip`（约 713 MB），在「设置 → CUDA 加速组件」里点「导入 CUDA 组件包」。导入后解压到 `%APPDATA%\modellodge\cuda\`，引擎会优先使用它；组件包存在时**独占** CUDA 运行时路径，不再扫描本机 LM Studio / llama.cpp 的 vendor 目录，避免两套 CUDA 12 DLL 混载。只有未安装组件包时，才会自动识别本机已有后端（CUDA 11 / 12 / 13 均支持）。CUDA 12 组件要求 NVIDIA 驱动 525 以上（CUDA 12.8 建议 570+），驱动过旧时软件自动回退 Vulkan / CPU。
+
+组件包包含 `ggml-cuda.dll` 及 CUDA 运行时 DLL（`cudart64_12.dll`、`cublas64_12.dll`、`cublasLt64_12.dll`），来源为 llama.cpp 预编译后端与 NVIDIA CUDA Runtime。CUDA 运行时 DLL 由 NVIDIA Corporation 提供，受 [CUDA EULA](https://docs.nvidia.com/cuda/eula/) 约束；`ggml-cuda.dll` 及 llama.cpp 组件遵循 MIT License。组件包内文件的 SHA256：
+
+- `ggml-cuda.dll` — `c5b6187b3afe4aa39efc0adfdc662c99211fae760ee3c29328cea15446cd4b1e`
+- `cudart64_12.dll` — `c2c9a9c22a9bcba90e261825968836787b331038047a26770cffb7a583c28344`
+- `cublas64_12.dll` — `9513540e4ec4c51ee9e7304138c2cc255c29a8c181f9e80c38efa25738becd99`
+- `cublasLt64_12.dll` — `b199d1ff892a81b7fd3d57ba1781549609b41500b36008fef326038393ad46c7`
+- 组件包整体 — `ca38e8228327798949eb71711fa9b739a14c4334d8ac7aa0e906165f597444b1`
+
+```
+MIT License
+
+Copyright (c) 2023-2024 The ggml authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+> llama.cpp 使用了 LLVM OpenMP Runtime，其许可证见同目录下的
+> `LICENSE-LLVM-OpenMP`（Apache License 2.0 with LLVM Exceptions）。
+
+---
+
 ## 五、结语
 
 再次感谢 Electron、Chromium、Node.js 等开源项目团队，以及所有开源模型的创作者。
