@@ -2,7 +2,7 @@
 
 **本地模型管理器 + 能干活的本地 AI。** 下载、管理 GGUF 模型，直接在本机推理、读文档、联网查资料、用白名单脚本操作电脑。零遥测、默认离线、无需注册账号。
 
-Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可选组件包，N 卡按需导入
+Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可选组件包，N 卡按需导入。
 
 ---
 
@@ -15,9 +15,9 @@ Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可�
 - 选个 GGUF 就加载并预热，不再等到第一次发消息才因显存不足失败
 - 工作模式：总结 / 写作 / 翻译 / 代码审查 / 数据解读
 - 按**实时空闲显存**自动算上下文与 GPU 卸载层数，也可手动选 0/25/50/75/99 层；选 0 层会明确传 `-ngl 0`，不会偷偷全卸载
-- 显存不足时自动逐级降低层数 / 上下文重试，状态栏显示最终实际档位
+- 显存不足时自动逐级降低层数 / 上下文重试（99→75→50→35→20→8→0，必要时折半上下文，最后回落到 CPU），状态栏显示最终实际档位
 - 实时显存占用条，接近上限时提示可能溢出到共享内存
-- NVIDIA 显卡：导入「CUDA 组件包」后自动优先 CUDA（与本机 LM Studio 后端互斥，不会混用两套 DLL）；不装则用 Vulkan（提示通常比 CUDA 慢）。CUDA 11 / 12 / 13 都支持
+- NVIDIA 显卡：导入「CUDA 组件包」后自动优先 CUDA（与本机 LM Studio 后端互斥，不会混用两套 DLL）；不装则用 Vulkan（提示通常比 CUDA 慢）。CUDA 11 / 12 / 13 运行时都支持
 
 ### 工作工具箱
 
@@ -42,11 +42,50 @@ Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可�
 ![CUDA 加速组件面板](docs/screenshots/07-cuda-panel.png)
 
 - 下载 → 导入 → 卸载三步都在设置里；面板直接显示本机 NVIDIA 驱动版本与兼容性提示
+- 详细安装步骤与驱动要求见下方「CUDA 组件包（可选）」
 
 ### 模型库与设置
 
 ![模型库](docs/screenshots/01-library.png)
+
 ![设置](docs/screenshots/03-settings.png)
+
+---
+
+## 安装与校验
+
+### 主程序
+
+下载 `ModelLodge-Setup-2.4.0.exe`（Windows x64，NSIS 安装向导，无需管理员权限），双击安装即可。
+
+个人开发者构建，**没有代码签名证书**。Windows SmartScreen 提示「未知发布者」属正常现象：核对下方 SHA256 一致后，点「更多信息」→「仍要运行」。
+
+PowerShell 校验：
+
+```powershell
+Get-FileHash "ModelLodge-Setup-2.4.0.exe" -Algorithm SHA256
+```
+
+| 文件 | 大小（字节） | SHA256（预期值） |
+| --- | --- | --- |
+| `ModelLodge-Setup-2.4.0.exe` | 98,041,321 | `f46dc5900cc53f2dff8d20472faef75662dac6fb10f70992a061d9f4064cb40e` |
+| `ModelLodge-CUDA12-Component.zip`（可选） | 747,577,064 | `ca38e8228327798949eb71711fa9b739a14c4334d8ac7aa0e906165f597444b1` |
+
+两个文件都在同一个 [Release 页面](https://github.com/i713650HX/modellodge/releases/tag/v2.4.0)。下载后若哈希与上表不一致，说明文件不完整或被篡改，请勿安装。
+
+### CUDA 组件包（可选，仅 NVIDIA）
+
+主包不内置 CUDA 运行时（体积保持约 98 MB）。N 卡想要 CUDA 加速，按下面三步：
+
+1. **下载**：设置 → CUDA 加速组件 →「下载 CUDA 组件包」，会用浏览器打开 Release 页面，下载 `ModelLodge-CUDA12-Component.zip`（约 713 MB，校验值见上表）。也可直接从左表链接手动下载。
+2. **导入**：回到设置页点「导入 CUDA 组件包」，选中刚下载的 zip。软件会校验 zip 内运行时文件（cudart / cublas / cublasLt）完整性与路径安全，然后解压到 `%APPDATA%\modellodge\cuda\`。
+3. **使用**：重启对话选择模型即可。面板会显示已安装的 CUDA 运行时与本机驱动版本；检测到 CUDA 后自动优先使用，不用手动切换。点「移除 CUDA 组件包」可随时卸载回 Vulkan / CPU。
+
+**驱动要求**：NVIDIA 驱动 **525 以上**；**建议 570 或以上**（CUDA 12.8 运行时）。低于 525 会自动拒绝 CUDA、回退 Vulkan / CPU，设置页会给出提示。别只按新显卡验证——老卡配老驱动同样要遵守这个门槛。
+
+不装组件包完全可用：软件自动走 Vulkan（部分机型比 CUDA 慢）或 CPU。组件包存在时会独占 CUDA 运行时路径，不再混入本机 LM Studio 的 vendor 目录，避免加载到不同版本 DLL。
+
+组件包含 NVIDIA CUDA 运行时，遵守 NVIDIA CUDA EULA，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
 
 ---
 
@@ -63,21 +102,7 @@ Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可�
 
 所以「零遥测」指的是**没有隐蔽的数据上报**；联网搜索是你主动开启、可随时关闭、内容可预期的显式行为，两者不冲突。
 
----
-
-## 安装与校验
-
-安装包：`ModelLodge-Setup-2.4.0.exe`（Windows x64，NSIS 安装向导，无需管理员权限）。
-
-N 卡可选 CUDA：在「设置 → CUDA 加速组件」点「下载 CUDA 组件包」会打开 Release 下载页（资产 `ModelLodge-CUDA12-Component.zip`，约 713 MB），下完点「导入 CUDA 组件包」选该 zip 即可；不装也能用 Vulkan / CPU。发布时 `publish_github.py` 会把主包和 CUDA 组件包一起上传到同一个 Release。组件包含 CUDA 运行时，遵守 NVIDIA CUDA EULA，详见第三方声明。**驱动要求：525 以上（CUDA 12.8 建议 570+）；老驱动请留在 Vulkan / CPU，别只按新卡验证。** 组件包存在时会独占 CUDA 运行时路径，不再混入本机 LM Studio 的 vendor，避免加载到不同版本的 DLL。
-
-```powershell
-Get-FileHash "ModelLodge-Setup-2.4.0.exe" -Algorithm SHA256
-```
-
-个人开发者构建，**没有代码签名证书**。Windows SmartScreen 提示「未知发布者」属正常现象：核对 SHA256 一致后，点「更多信息」→「仍要运行」。当前构建不会上传任何数据；日志与配置只写本机 `%APPDATA%\modellodge\`，卸载时可选择一并清理。
-
-遇到问题时：设置 → 数据管理 → **导出诊断包**，会在桌面生成 zip（只含日志和非敏感配置，不含 Token）。
+遇到问题时：设置 → 数据管理 → **导出诊断包**，会在桌面生成 zip（只含日志和非敏感配置，不含 Token）。卸载时可选择一并清理应用数据。
 
 ---
 
