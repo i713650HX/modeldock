@@ -14,7 +14,6 @@ contextBridge.exposeInMainWorld('api', {
   saveNote: (filePath, note) => ipcRenderer.invoke('save-note', filePath, note),
   exportCsv: (rows) => ipcRenderer.invoke('export-csv', rows),
   getAppInfo: () => ipcRenderer.invoke('get-app-info'),
-  openExternal: (url) => ipcRenderer.invoke('open-external', url),
   getGpus: () => ipcRenderer.invoke('get-gpus'),
   refreshGpus: () => ipcRenderer.invoke('refresh-gpus'),
   assessFit: (bytes) => ipcRenderer.invoke('assess-fit', bytes),
@@ -39,6 +38,10 @@ contextBridge.exposeInMainWorld('api', {
   // model downloader
   hfSearch: (q, source, typeFilter) => ipcRenderer.invoke('hf-search', q, source, typeFilter),
   hfFiles: (repo, source) => ipcRenderer.invoke('hf-files', repo, source),
+  modelDetail: (repo, source, revision) => ipcRenderer.invoke('model-detail', repo, source, revision),
+  modelReadme: (repo, source, revision) => ipcRenderer.invoke('model-readme', repo, source, revision),
+  modelOptions: (repo, source, revision) => ipcRenderer.invoke('model-options', repo, source, revision),
+  modelPage: (repo, source, revision) => ipcRenderer.invoke('model-page', repo, source, revision),
   downloadStart: (task) => ipcRenderer.invoke('download-start', task),
   downloadUrl: (task) => ipcRenderer.invoke('download-url', task),
   downloadCancel: (id) => ipcRenderer.invoke('download-cancel', id),
@@ -53,6 +56,45 @@ contextBridge.exposeInMainWorld('api', {
   renameModelFile: (oldPath, newName) => ipcRenderer.invoke('rename-model-file', oldPath, newName),
   moveModelFiles: (paths, targetDir) => ipcRenderer.invoke('move-model-files', paths, targetDir),
   onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (e, data) => callback(data)),
+
+  // AI chat (local inference backends: Ollama / llama.cpp / LM Studio)
+  chatDetect: () => ipcRenderer.invoke('chat-detect'),
+  chatSend: (backend, model, messages, opts) => ipcRenderer.invoke('chat-send', backend, model, messages, opts),
+  chatAbort: (reqId) => ipcRenderer.invoke('chat-abort', reqId),
+  webSearch: (query) => ipcRenderer.invoke('web-search', query),
+  chatStartLlama: (modelPath, opts) => ipcRenderer.invoke('chat-start-llama', modelPath, opts),
+  chatStartOllama: () => ipcRenderer.invoke('chat-start-ollama'),
+  chatStartLmStudio: (port) => ipcRenderer.invoke('chat-start-lmstudio', port),
+  pickModelFiles: () => ipcRenderer.invoke('pick-model-files'),
+  loadImportedModels: () => ipcRenderer.invoke('load-imported-models'),
+  saveImportedModels: (models) => ipcRenderer.invoke('save-imported-models', models),
+
+  // Work assistant: document context, persistent sessions, export
+  pickContextFiles: () => ipcRenderer.invoke('pick-context-files'),
+  readContextFiles: (paths) => ipcRenderer.invoke('read-context-files', paths),
+  loadChatSessions: () => ipcRenderer.invoke('load-chat-sessions'),
+  saveChatSessions: (payload) => ipcRenderer.invoke('save-chat-sessions', payload),
+  exportChatMd: (content, suggestedName) => ipcRenderer.invoke('export-chat-md', content, suggestedName),
+  assistantAction: (key, param, opts) => ipcRenderer.invoke('assistant-action', key, param, opts),
+  softwareList: (query) => ipcRenderer.invoke('software-list', query),
+  onSoftwareDownloadDone: (callback) => ipcRenderer.on('software-download-done', (e, data) => callback(data)),
+
+  // Built-in inference engine (llama.cpp shipped with the app)
+  engineDetect: () => ipcRenderer.invoke('engine-detect'),
+  engineStart: (modelPath, opts) => ipcRenderer.invoke('engine-start', modelPath, opts),
+  engineStop: () => ipcRenderer.invoke('engine-stop'),
+  engineChat: (messages, opts) => ipcRenderer.invoke('engine-chat', messages, opts),
+  engineAbort: (reqId) => ipcRenderer.invoke('engine-abort', reqId),
+  onChatDelta: (callback) => ipcRenderer.on('chat-delta', (e, data) => callback(data)),
+  engineSuggest: (bytes, vramMB, freeMB) => ipcRenderer.invoke('engine-suggest', bytes, vramMB, freeMB),
+  vramUsage: () => ipcRenderer.invoke('vram-usage'),
+  exportDiagnostics: () => ipcRenderer.invoke('export-diagnostics'),
+  cleanOldEngines: () => ipcRenderer.invoke('clean-old-engines'),
+  cudaPackDownload: () => ipcRenderer.invoke('cuda-pack-download'),
+  cudaPackStatus: () => ipcRenderer.invoke('cuda-pack-status'),
+  cudaPackImport: () => ipcRenderer.invoke('cuda-pack-import'),
+  cudaPackRemove: () => ipcRenderer.invoke('cuda-pack-remove'),
+  onFileProgress: (callback) => ipcRenderer.on('file-progress', (e, data) => callback(data)),
 
   // menu events from main process
   onMenu: (callback) => {
