@@ -569,13 +569,23 @@ function streamChat(port, messages, onDelta, opts = {}) {
   return new Promise((resolve, reject) => {
     const reqId = opts.reqId || '';
     let full = '';
-    const body = JSON.stringify({
+    let reasoning = '';
+    const payload = {
       model: 'local',
       messages,
       stream: true,
       temperature: opts.temperature != null ? opts.temperature : 0.7,
       max_tokens: opts.maxTokens || 2048,
-    });
+    };
+    // Qwen3 / DeepSeek-R1 style reasoning models think by default, which makes
+    // a simple "你好" take ~2s with an empty bubble before any visible text.
+    // Thinking OFF by default gives ~300ms first token. An explicit opt-in
+    // (opts.thinking === true) keeps deep reasoning available. llama.cpp reads
+    // this via the model's Jinja chat template.
+    if (opts.thinking !== true) {
+      payload.chat_template_kwargs = { enable_thinking: false };
+    }
+    const body = JSON.stringify(payload);
     const req = http.request({
       host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
@@ -601,13 +611,18 @@ function streamChat(port, messages, onDelta, opts = {}) {
           try {
             const j = JSON.parse(data);
             const ch = j.choices && j.choices[0];
-            const text = (ch && ch.delta && ch.delta.content) || '';
+            const d = (ch && ch.delta) || {};
+            // Reasoning models stream their "thinking" in reasoning_content.
+            // Forward it separately so the UI can show it instead of an empty bubble.
+            const think = d.reasoning_content || '';
+            if (think) { reasoning += think; if (opts.onReasoning) opts.onReasoning(think); }
+            const text = d.content || '';
             if (text) { full += text; if (onDelta) onDelta(text); }
           } catch (e) { /* ignore partial */ }
         }
       });
-      res.on('end', () => { if (reqId) activeRequests.delete(reqId); resolve({ ok: true, content: full }); });
-      res.on('aborted', () => { if (reqId) activeRequests.delete(reqId); resolve({ ok: true, content: full, aborted: true }); });
+      res.on('end', () => { if (reqId) activeRequests.delete(reqId); resolve({ ok: true, content: full, reasoning }); });
+      res.on('aborted', () => { if (reqId) activeRequests.delete(reqId); resolve({ ok: true, content: full, reasoning, aborted: true }); });
     });
     req.on('error', (err) => {
       if (reqId) activeRequests.delete(reqId);
