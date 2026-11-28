@@ -1862,6 +1862,7 @@ const chatState = {
   history: [],        // { role, content } — always points at the active session
   streaming: false,
   pending: false,
+  sendEpoch: 0,     // bumped on stop / new send so a stale request cannot clobber UI state
   // --- work assistant state ---
   sessions: [],       // [{ id, title, createdAt, updatedAt, messages }]
   activeSessionId: null,
@@ -2312,6 +2313,11 @@ function collectLocalModels() {
   for (const m of [...fromLibrary, ...(chatState.importedModels || [])]) {
     const p = m.path || '';
     if (!p || seen.has(p) || !/\.gguf$/i.test(p)) continue;
+    // mmproj-*.gguf are CLIP vision projectors, not standalone chat models.
+    // llama.cpp refuses them as the main model ("CLIP cannot be used as main
+    // model"), so never offer them in the one-click launcher or dropdown.
+    const base = String(m.name || p).split(/[\\/]/).pop();
+    if (/^mmproj[-_]/i.test(base) || /-mmproj[-.]/i.test(base)) continue;
     seen.add(p);
     list.push(m);
   }
@@ -3051,6 +3057,7 @@ async function sendChatMessage() {
   const webToggle = document.getElementById('chat-web-toggle');
   const searchEnabled = !!(webToggle && webToggle.checked);
 
+  const epoch = ++chatState.sendEpoch;
   chatState.streaming = true;
   chatState.pending = true;
   el.chatSend.disabled = true;
@@ -3138,11 +3145,16 @@ async function sendChatMessage() {
     finalError = friendlyEngineError(e);
   }
 
-  chatState.pending = false;
-  chatState.streaming = false;
-  chatState.reqId = '';
-  el.chatSend.disabled = false;
-  el.chatStop.classList.add('hidden');
+  // A stopped request may resolve after the user already started a new send.
+  // Only touch shared UI state if we are still the active generation.
+  const isCurrent = epoch === chatState.sendEpoch;
+  if (isCurrent) {
+    chatState.pending = false;
+    chatState.streaming = false;
+    chatState.reqId = '';
+    el.chatSend.disabled = false;
+    el.chatStop.classList.add('hidden');
+  }
 
   const partial = (bubble.textContent || '').trim();
   if (finalError) {
@@ -3186,10 +3198,16 @@ el.chatInput.addEventListener('keydown', (e) => {
 });
 el.chatStop.addEventListener('click', async () => {
   if (!chatState.pending) return;
+  // Release the input immediately. Previously only `pending` was cleared, so
+  // `streaming` stayed true until the aborted request resolved — if abort hung,
+  // the user could not send anything new ("正在生成中，请先停止").
   chatState.pending = false;
+  chatState.streaming = false;
+  chatState.sendEpoch++;          // invalidate the in-flight generation
+  el.chatSend.disabled = false;
   el.chatStop.classList.add('hidden');
   // Kill the actual HTTP request so the model stops generating on the GPU.
-  // The pending chat-send/engine-chat call resolves with {aborted:true}.
+  // The in-flight sendChatMessage resolves with {aborted:true} shortly after.
   const reqId = chatState.reqId;
   chatState.reqId = '';
   if (reqId) {
@@ -3216,11 +3234,22 @@ if (el.chatBackendPref) el.chatBackendPref.addEventListener('change', async () =
   try { await ML.saveSettings({ backendPreference: el.chatBackendPref.value }); } catch (_) {}
   await refreshEngineStatus();
 });
+// GPU acceleration should be ON by default: CPU-only inference of a 4B model
+// is painfully slow. Remember an explicit user opt-out across restarts.
+if (el.chatGpu) el.chatGpu.addEventListener('change', async () => {
+  try { await ML.saveSettings({ gpuEnabled: el.chatGpu.checked }); } catch (_) {}
+});
 (async () => {
   try {
     const s = await ML.loadSettings();
     if (s && s.backendPreference && el.chatBackendPref) el.chatBackendPref.value = s.backendPreference;
-  } catch (_) {}
+    if (el.chatGpu) {
+      // undefined (fresh install) => default ON; only an explicit false disables it.
+      el.chatGpu.checked = !(s && s.gpuEnabled === false);
+    }
+  } catch (_) {
+    if (el.chatGpu) el.chatGpu.checked = true;
+  }
 })();
 const importBtn = document.getElementById('btn-import-gguf');
 if (importBtn) importBtn.addEventListener('click', importGgufFiles);
