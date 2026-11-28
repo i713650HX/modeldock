@@ -64,6 +64,7 @@ contextBridge.exposeInMainWorld('api', {
   webSearch: (query) => ipcRenderer.invoke('web-search', query),
   chatStartLlama: (modelPath, opts) => ipcRenderer.invoke('chat-start-llama', modelPath, opts),
   chatStartOllama: () => ipcRenderer.invoke('chat-start-ollama'),
+  chatRestartOllama: () => ipcRenderer.invoke('chat-restart-ollama'),
   chatStartLmStudio: (port) => ipcRenderer.invoke('chat-start-lmstudio', port),
   pickModelFiles: () => ipcRenderer.invoke('pick-model-files'),
   loadImportedModels: () => ipcRenderer.invoke('load-imported-models'),
@@ -94,6 +95,15 @@ contextBridge.exposeInMainWorld('api', {
   cudaPackStatus: () => ipcRenderer.invoke('cuda-pack-status'),
   cudaPackImport: () => ipcRenderer.invoke('cuda-pack-import'),
   cudaPackRemove: () => ipcRenderer.invoke('cuda-pack-remove'),
+  apiServerStatus: () => ipcRenderer.invoke('api-server-status'),
+  apiServerConfigure: (cfg) => ipcRenderer.invoke('api-server-configure', cfg),
+  apiServerTokenRegenerate: () => ipcRenderer.invoke('api-server-token-regenerate'),
+  modelCheck: (modelPath, opts) => ipcRenderer.invoke('model-check', modelPath, opts),
+  modelCheckCancel: () => ipcRenderer.invoke('model-check-cancel'),
+  modelProfileGet: (modelPath) => ipcRenderer.invoke('model-profile-get', modelPath),
+  modelProfileSave: (modelPath, profile) => ipcRenderer.invoke('model-profile-save', modelPath, profile),
+  modelProfileRemove: (modelPath) => ipcRenderer.invoke('model-profile-remove', modelPath),
+  onModelCheckProgress: (callback) => ipcRenderer.on('model-check-progress', (e, data) => callback(data)),
   onFileProgress: (callback) => ipcRenderer.on('file-progress', (e, data) => callback(data)),
 
   // menu events from main process
