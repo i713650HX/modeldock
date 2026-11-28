@@ -37,6 +37,15 @@ Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可�
 - 按名称/参数量搜索 HF / 魔搭，只看适配本机显存的量化版本
 - 一键下载、断点续传，Gated 模型给出 Token 指引
 
+### OpenAI 兼容 API 服务器 / 局域网聊天（v2.5.0 新增）
+
+设置 → 网络与下载 →「API 服务器」：打开开关后，Cherry Studio / Continue / Cursor 等任意 OpenAI 客户端填固定端口（默认 1234）即可调用本机引擎。
+
+- **默认安全**：自动生成随机 token，请求必须带 `Authorization: Bearer <token>`，无 token 一律 401；默认只监听 `127.0.0.1`
+- **局域网模式**（显式 opt-in）：勾选后监听 `0.0.0.0`，同一 WiFi 下的手机 / 平板浏览器打开显示的地址，输入 token 即可流式聊天，推理跑在 PC 显卡上。内置单文件移动聊天页，手机端不用装 App
+- **模型体检**：聊天侧栏点「模型体检」，自动扫卸载层数 / 上下文跑短推理出报告，一键应用；结果按模型路径保存，下次加载该模型自动套用
+- **多线程下载**：设置 →「单文件下载线程」可切 1 / 4 / 8 / 12 / 16 线程。大文件切成多段并发下载后合并，服务器不支持分段时自动回退单线程；小文件不分段
+
 ### CUDA 组件包面板
 
 ![CUDA 加速组件面板](docs/screenshots/07-cuda-panel.png)
@@ -56,22 +65,22 @@ Windows x64 · Electron 28 · 内置 llama.cpp（CPU / Vulkan）；CUDA 为可�
 
 ### 主程序
 
-下载 `ModelLodge-Setup-2.4.0.exe`（Windows x64，NSIS 安装向导，无需管理员权限），双击安装即可。
+下载 `ModelLodge-Setup-2.5.0.exe`（Windows x64，NSIS 安装向导，无需管理员权限），双击安装即可。
 
 个人开发者构建，**没有代码签名证书**。Windows SmartScreen 提示「未知发布者」属正常现象：核对下方 SHA256 一致后，点「更多信息」→「仍要运行」。
 
 PowerShell 校验：
 
 ```powershell
-Get-FileHash "ModelLodge-Setup-2.4.0.exe" -Algorithm SHA256
+Get-FileHash "ModelLodge-Setup-2.5.0.exe" -Algorithm SHA256
 ```
 
 | 文件 | 大小（字节） | SHA256（预期值） |
 | --- | --- | --- |
-| `ModelLodge-Setup-2.4.0.exe` | 98,041,321 | `f46dc5900cc53f2dff8d20472faef75662dac6fb10f70992a061d9f4064cb40e` |
+| `ModelLodge-Setup-2.5.0.exe` | 98,060,455 | `16db58911bf11c008c8658a6787e6462ca9d5286be52b6ad6bf5a4ea9f05b1a9` |
 | `ModelLodge-CUDA12-Component.zip`（可选） | 747,577,064 | `ca38e8228327798949eb71711fa9b739a14c4334d8ac7aa0e906165f597444b1` |
 
-两个文件都在同一个 [Release 页面](https://github.com/i713650HX/modellodge/releases/tag/v2.4.0)。下载后若哈希与上表不一致，说明文件不完整或被篡改，请勿安装。
+两个文件都在同一个 [Release 页面](https://github.com/i713650HX/modellodge/releases/tag/v2.5.0)。下载后若哈希与上表不一致，说明文件不完整或被篡改，请勿安装。
 
 ### CUDA 组件包（可选，仅 NVIDIA）
 
