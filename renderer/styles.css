@@ -1732,3 +1732,22 @@ body { font-size: 14px; line-height: 1.5; }
 /* ===== POLISH v7.1 — backend restart for stuck CUDA context ===== */
 .backend-restart { margin-left:auto; font-size:11px; padding:1px 7px; opacity:.75; }
 .backend-restart:hover { opacity:1; }
+
+/* ===== POLISH v7.2 — deep-thinking toggle + collapsible reasoning block ===== */
+.chat-param-check .chat-thinking-hint { margin-left:6px; font-size:10px; opacity:.55; }
+.chat-thinking-block {
+  margin:2px 0 8px; padding:8px 12px; border-radius:10px;
+  background:rgba(128,138,160,.09); border:1px solid rgba(128,138,160,.18);
+  font-size:12px; line-height:1.55; color:var(--text-muted, #8a93a5);
+}
+.chat-thinking-block summary {
+  cursor:pointer; list-style:none; font-weight:600; opacity:.8;
+  display:flex; align-items:center; gap:6px; user-select:none;
+}
+.chat-thinking-block summary::-webkit-details-marker { display:none; }
+.chat-thinking-block summary::before { content:'▸'; font-size:10px; transition:transform .15s; }
+.chat-thinking-block[open] summary::before { transform:rotate(90deg); }
+.chat-thinking-body {
+  margin-top:7px; max-height:260px; overflow-y:auto;
+  white-space:pre-wrap; word-break:break-word; opacity:.85;
+}
