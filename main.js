@@ -463,14 +463,107 @@ ipcMain.handle('save-note', async (event, filePath, payload) => {
 // ---- Persist folders ----
 const storePath = path.join(app.getPath('userData'), 'folders.json');
 
+// A config wipe (uninstall / manual reset) must not make models "disappear".
+// These helpers rebuild the folder list from whatever is actually on disk.
+function dirHasModel(dir, maxDepth, budget) {
+  const stack = [{ dir, depth: 0 }];
+  let checked = 0;
+  while (stack.length && checked < budget.n) {
+    const cur = stack.shift();
+    let entries;
+    try { entries = fs.readdirSync(cur.dir, { withFileTypes: true }); } catch (_) { continue; }
+    for (const e of entries) {
+      checked++; budget.n--;
+      if (budget.n <= 0) break;
+      if (e.isFile()) {
+        if (MODEL_EXTS.has(path.extname(e.name).toLowerCase())) return true;
+      } else if (e.isDirectory() && cur.depth < maxDepth && !excludedDirName(e.name) && !e.name.startsWith('.')) {
+        stack.push({ dir: path.join(cur.dir, e.name), depth: cur.depth + 1 });
+      }
+    }
+  }
+  return false;
+}
+
+function discoverModelFolders() {
+  const candidates = [];
+  const add = (p) => {
+    try { if (p && fs.existsSync(p)) { const abs = path.resolve(p); if (!candidates.includes(abs)) candidates.push(abs); } } catch (_) {}
+  };
+  // Previously used download / import directories (if their config survived).
+  for (const file of [lastModelDirPath, downloadsPath]) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const dirs = Array.isArray(data)
+        ? data.map((d) => d && (d.destDir || d.dir)).filter(Boolean)
+        : [data && (data.dir || data.destDir)].filter(Boolean);
+      dirs.forEach(add);
+    } catch (_) {}
+  }
+  const home = app.getPath('home');
+  add(path.join(home, '.lmstudio', 'models'));
+  add(path.join(home, 'AppData', 'Local', 'lmstudio', 'models'));
+  add(path.join(home, 'Downloads'));
+  const drives = [];
+  if (process.platform === 'win32') {
+    for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+      const root = letter + ':\\';
+      try { if (fs.existsSync(root)) drives.push(root); } catch (_) {}
+    }
+  } else drives.push('/');
+  const hintNames = ['LMStudio_Models', 'LM Studio', 'llama.cpp', 'models', 'Models', '模型', 'gguf', 'GGUF', 'LLM', 'Downloads'];
+  // Round 1: well-known names on every drive first (cheap, high hit rate).
+  for (const root of drives) for (const name of hintNames) add(path.join(root, name));
+  // Round 2: one/two levels under each drive root — catches e.g. E:\Videos\x.gguf.
+  // Keep a separate list so a big system drive cannot crowd out the hints.
+  const looseCandidates = [];
+  const addLoose = (p) => {
+    try { if (p && fs.existsSync(p)) { const abs = path.resolve(p); if (!candidates.includes(abs) && !looseCandidates.includes(abs)) looseCandidates.push(abs); } } catch (_) {}
+  };
+  for (const root of drives) {
+    try {
+      for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!e.isDirectory() || excludedDirName(e.name)) continue;
+        const d = path.join(root, e.name);
+        addLoose(d);
+        try {
+          for (const e2 of fs.readdirSync(d, { withFileTypes: true })) {
+            if (e2.isDirectory() && !excludedDirName(e2.name)) addLoose(path.join(d, e2.name));
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  // Keep only directories that really contain a model, drop child dirs covered
+  // by an already-confirmed parent, and cap the list so scans stay fast.
+  const budget = { n: 60000 };
+  const confirmed = [];
+  for (const c of candidates.concat(looseCandidates)) {
+    if (confirmed.length >= 20 || budget.n <= 0) break;
+    if (dirHasModel(c, 4, budget)) confirmed.push(c);
+  }
+  return confirmed.filter((p) => !confirmed.some((q) => q !== p && p.startsWith(q + path.sep)));
+}
+
 ipcMain.handle('load-folders', async () => {
   try {
     if (fs.existsSync(storePath)) {
       const data = JSON.parse(fs.readFileSync(storePath, 'utf8'));
-      return Array.isArray(data) ? data : [];
+      if (Array.isArray(data) && data.length) return data;
     }
   } catch (err) {
     // ignore
+  }
+  // Config missing or empty: rebuild from disk so models never look "deleted".
+  try {
+    const discovered = discoverModelFolders();
+    if (discovered.length) {
+      fs.writeFileSync(storePath, JSON.stringify(discovered, null, 2), 'utf8');
+      return discovered;
+    }
+  } catch (err) {
+    logger.warn('folder discovery failed: ' + err.message);
   }
   // default candidate folders
   const home = app.getPath('home');
