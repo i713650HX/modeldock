@@ -109,6 +109,7 @@ const el = {
   chatTempVal: document.getElementById('chat-temp-val'),
   chatCtx: document.getElementById('chat-ctx'),
   chatGpu: document.getElementById('chat-gpu'),
+  chatThinking: document.getElementById('chat-thinking'),
   chatNgl: document.getElementById('chat-ngl'),
   chatBackendPref: document.getElementById('chat-backend-pref'),
   chatVram: document.getElementById('chat-vram'),
@@ -3054,6 +3055,23 @@ async function sendChatMessage() {
 
   const bubble = appendChatMessage('assistant', '');
   const wrap = bubble.parentElement;
+  // Deep-thinking mode: models stream `reasoning_content` before the answer.
+  // Show it in a collapsible block above the bubble so the answer area is
+  // never an empty spinning bubble.
+  chatState.reasoningNode = null;
+  if (el.chatThinking && el.chatThinking.checked) {
+    const details = document.createElement('details');
+    details.className = 'chat-thinking-block';
+    const summary = document.createElement('summary');
+    summary.textContent = t('chat.thinkingLabel') || '思考过程';
+    const body = document.createElement('div');
+    body.className = 'chat-thinking-body';
+    details.appendChild(summary);
+    details.appendChild(body);
+    wrap.insertBefore(details, bubble);
+    chatState.reasoningNode = body;
+    details.open = true;
+  }
   const webToggle = document.getElementById('chat-web-toggle');
   const searchEnabled = !!(webToggle && webToggle.checked);
 
@@ -3090,6 +3108,7 @@ async function sendChatMessage() {
           temperature: Number(el.chatTemp.value),
           ctx: Number(el.chatCtx.value),
           maxTokens: 2048,
+          thinking: !!(el.chatThinking && el.chatThinking.checked),
           reqId,
         };
         let r;
@@ -3176,7 +3195,7 @@ async function sendChatMessage() {
   el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
 }
 
-// 流式增量
+// 流式增量（正文）
 ML.onChatDelta(({ delta }) => {
   if (!delta) return;
   // Guard: deltas that arrive after the request already resolved would duplicate
@@ -3186,6 +3205,18 @@ ML.onChatDelta(({ delta }) => {
   if (!bubbles.length) return;
   const last = bubbles[bubbles.length - 1];
   last.textContent += delta;
+  // Once real answer text arrives, collapse the thinking block.
+  const blocks = el.chatMessages.querySelectorAll('.chat-thinking-block');
+  if (blocks.length) blocks[blocks.length - 1].open = false;
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+});
+
+// 流式增量（思考过程）
+ML.onChatReasoning(({ delta }) => {
+  if (!delta || !chatState.streaming) return;
+  const node = chatState.reasoningNode;
+  if (!node) return;
+  node.textContent += delta;
   el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
 });
 
@@ -3239,6 +3270,9 @@ if (el.chatBackendPref) el.chatBackendPref.addEventListener('change', async () =
 if (el.chatGpu) el.chatGpu.addEventListener('change', async () => {
   try { await ML.saveSettings({ gpuEnabled: el.chatGpu.checked }); } catch (_) {}
 });
+if (el.chatThinking) el.chatThinking.addEventListener('change', async () => {
+  try { await ML.saveSettings({ thinkingEnabled: el.chatThinking.checked }); } catch (_) {}
+});
 (async () => {
   try {
     const s = await ML.loadSettings();
@@ -3247,8 +3281,14 @@ if (el.chatGpu) el.chatGpu.addEventListener('change', async () => {
       // undefined (fresh install) => default ON; only an explicit false disables it.
       el.chatGpu.checked = !(s && s.gpuEnabled === false);
     }
+    if (el.chatThinking) {
+      // Deep thinking OFF by default for instant first token; only an explicit
+      // true enables it (users who want deeper reasoning can turn it on).
+      el.chatThinking.checked = !!(s && s.thinkingEnabled === true);
+    }
   } catch (_) {
     if (el.chatGpu) el.chatGpu.checked = true;
+    if (el.chatThinking) el.chatThinking.checked = false;
   }
 })();
 const importBtn = document.getElementById('btn-import-gguf');
