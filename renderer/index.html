@@ -271,6 +271,11 @@
                 <option value="cpu" data-i18n-option="backend.cpu">仅 CPU</option>
               </select>
             </label>
+            <div class="chat-check-row">
+              <button id="btn-model-check" class="secondary-btn" title="自动测试最佳卸载层数与上下文，并保存为该模型的专属配置">模型体检</button>
+              <span id="model-check-badge" class="model-check-badge hidden">已优化</span>
+            </div>
+            <div id="model-check-report" class="model-check-report hidden"></div>
             <div id="chat-vram" class="chat-vram hidden">
               <div class="chat-vram-head"><span data-i18n="chat.vram">显存占用</span><span id="chat-vram-text">-</span></div>
               <div class="chat-vram-bar"><div id="chat-vram-fill" class="chat-vram-fill"></div></div>
@@ -619,8 +624,17 @@
             <option value="3">3 个</option>
             <option value="4">4 个（快但占带宽）</option>
           </select>
-          <div class="cmd-hint">同时进行的下载任务数。网速快可调高。</div>
-          <div class="detail-label" style="margin-top:10px;font-size:12px">同名文件冲突策略</div>
+  <div class="cmd-hint">同时进行的下载任务数。网速快可调高。</div>
+  <div class="detail-label" style="margin-top:10px;font-size:12px">单文件下载线程</div>
+  <select id="settings-threads" class="detail-input">
+    <option value="1">1（单线程，兼容模式）</option>
+    <option value="4">4 线程</option>
+    <option value="8" selected>8 线程（推荐）</option>
+    <option value="12">12 线程</option>
+    <option value="16">16 线程（最快）</option>
+  </select>
+  <div class="cmd-hint">把单个模型切成多段同时下载，服务器不支持分段时自动回退单线程。小文件不会分段。</div>
+  <div class="detail-label" style="margin-top:10px;font-size:12px">同名文件冲突策略</div>
           <select id="settings-conflict" class="detail-input">
             <option value="skip">跳过（保留已存在文件）</option>
             <option value="overwrite">覆盖（重新下载）</option>
@@ -648,6 +662,22 @@
             <button id="cuda-pack-remove" class="secondary-btn" data-i18n="cuda.remove">卸载 CUDA 组件</button>
           </div>
           <div id="cuda-pack-result" class="cmd-hint" style="margin-top:6px"></div>
+        </div>
+        <div class="detail-section">
+          <div class="detail-label">API 服务器（给其它 AI 工具调用）</div>
+          <div class="cmd-hint">把本机模型变成 OpenAI 兼容接口，Cherry Studio / Continue / Cursor 等工具填固定地址即可调用。默认仅本机访问。</div>
+          <div class="api-row"><label class="cmd-hint"><input type="checkbox" id="api-enabled" /> 启用 API 服务器</label></div>
+          <div class="api-row"><label class="cmd-hint"><input type="checkbox" id="api-lan" /> 允许局域网设备访问（0.0.0.0）</label></div>
+          <div class="api-row"><span class="cmd-hint">端口</span><input id="api-port" type="number" min="1024" max="65535" class="detail-input api-port" value="1234" /></div>
+          <div class="api-row"><span class="cmd-hint">访问令牌</span><code id="api-token" class="api-token">-</code></div>
+          <div class="api-row api-btn-row">
+            <button id="api-save" class="primary-btn small-btn">保存并应用</button>
+            <button id="api-regen" class="secondary-btn">重置令牌</button>
+            <button id="api-copy" class="secondary-btn">复制地址</button>
+          </div>
+          <div id="api-status" class="cmd-hint" style="margin-top:6px"></div>
+          <div id="api-urls" class="api-urls"></div>
+          <div class="cmd-hint" style="margin-top:6px">手机 / 平板连同一 WiFi，浏览器打开上面的局域网地址，输入令牌即可聊天，推理仍在你电脑上进行。</div>
         </div>
         <div class="detail-section">
           <div class="detail-label">数据管理</div>
