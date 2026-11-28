@@ -87,6 +87,7 @@ contextBridge.exposeInMainWorld('api', {
   engineChat: (messages, opts) => ipcRenderer.invoke('engine-chat', messages, opts),
   engineAbort: (reqId) => ipcRenderer.invoke('engine-abort', reqId),
   onChatDelta: (callback) => ipcRenderer.on('chat-delta', (e, data) => callback(data)),
+  onChatReasoning: (callback) => ipcRenderer.on('chat-reasoning', (e, data) => callback(data)),
   engineSuggest: (bytes, vramMB, freeMB) => ipcRenderer.invoke('engine-suggest', bytes, vramMB, freeMB),
   vramUsage: () => ipcRenderer.invoke('vram-usage'),
   exportDiagnostics: () => ipcRenderer.invoke('export-diagnostics'),
