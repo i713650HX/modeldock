@@ -15,6 +15,18 @@ const SOURCES = {
 
 const USER_AGENT = 'ModelLodge/1.0 (+local-model-manager)';
 
+// ---- Multi-threaded segmented download ----
+// Each file is fetched in N parallel HTTP Range requests and merged at the end.
+// Servers that reject Range fall back to the original single-stream downloader.
+const MIN_MULTI_BYTES = 32 * 1024 * 1024;   // don't split small files
+const MIN_SEGMENT_BYTES = 4 * 1024 * 1024;  // keep segments reasonably large
+let downloadThreads = 8;                    // default segments per file
+function setDownloadThreads(n) {
+  const v = Math.floor(Number(n));
+  if (isFinite(v) && v >= 1 && v <= 16) downloadThreads = v;
+}
+function getDownloadThreads() { return downloadThreads; }
+
 // Auth header helper: only send the token to the configured HF hosts,
 // never forward it to CDN redirects (security).
 function authHeaders(token, url) {
@@ -427,25 +439,32 @@ function requestOnce(url, opts, redirects = 0) {
   });
 }
 
-// HEAD request to learn remote file size (follows redirects, no body download).
-function headContentLength(url, redirects = 0) {
+// HEAD request to learn remote file size + Range support (follows redirects).
+function headFileInfo(url, redirects = 0) {
   return new Promise((resolve) => {
-    if (redirects > 8) return resolve(null);
+    if (redirects > 8) return resolve({ length: null, acceptRanges: '' });
     const lib = url.startsWith('https:') ? https : http;
     const req = lib.request(url, { method: 'HEAD', headers: { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url) }, agent: agentFor(url) }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         res.resume();
         const next = new URL(res.headers.location, url).toString();
-        return headContentLength(next, redirects + 1).then(resolve);
+        return headFileInfo(next, redirects + 1).then(resolve);
       }
       res.resume();
       const len = parseInt(res.headers['content-length'], 10);
-      resolve(isFinite(len) && len > 0 ? len : null);
+      resolve({
+        length: isFinite(len) && len > 0 ? len : null,
+        acceptRanges: String(res.headers['accept-ranges'] || ''),
+      });
     });
-    req.on('error', () => resolve(null));
+    req.on('error', () => resolve({ length: null, acceptRanges: '' }));
     req.setTimeout(10000, () => req.destroy());
     req.end();
   });
+}
+// Backwards-compatible helper used by the single-stream path.
+function headContentLength(url) {
+  return headFileInfo(url).then((i) => i.length);
 }
 
 // SECURITY: normalize every file name before it touches the filesystem.
@@ -514,16 +533,21 @@ async function downloadFile(task, onProgress) {
       }
       while (fs.existsSync(destPath));
     }
-    return { ...e, fileName, destPath, partPath: destPath + '.part' };
+    const threads = e.threads !== undefined ? e.threads
+      : (task.threads !== undefined ? task.threads : downloadThreads);
+    return { ...e, fileName, destPath, partPath: destPath + '.part', threads };
   });
   const badEntries = planned.filter((p) => p.invalidName);
   if (badEntries.length) return { ok: false, error: '下载文件名不安全，已拒绝写入：' + badEntries[0].fileName };
 
   // Total size for the whole group (used for the shared progress bar).
+  // When entries carry no known size (direct URLs), trust the per-file total
+  // reported by the fetcher instead of showing a meaningless "1 byte" total.
   let groupTotal = planned.reduce((s, p) => s + (p.size || 0), 0);
+  const groupTotalKnown = groupTotal > 0;
   if (!groupTotal) groupTotal = planned.length;
 
-  const ctrl = { cancelled: false, paused: false, pauseResolvers: [], stream: null };
+  const ctrl = { cancelled: false, paused: false, pauseResolvers: [], stream: null, streams: [] };
   activeDownloads.set(id, ctrl);
 
   let groupLoaded = 0;
@@ -535,13 +559,18 @@ async function downloadFile(task, onProgress) {
 
     for (const p of planned) {
       if (ctrl.cancelled) return { ok: false, cancelled: true };
-      const res = await downloadOneFile(p, ctrl, conflict, (loaded, total, speed) => {
-        onProgress({ id, status: 'downloading', loaded: groupLoaded + loaded, total: groupTotal || total, speed, stalled: false });
+      const useMulti = Number(p.threads) > 1 && !p.invalidName;
+      const fetchOne = useMulti ? downloadOneFileMulti : downloadOneFile;
+      const res = await fetchOne(p, ctrl, conflict, (loaded, total, speed) => {
+        onProgress({ id, status: 'downloading', loaded: groupLoaded + loaded,
+          total: groupTotalKnown ? groupTotal : (total || groupTotal), speed, stalled: false });
       }, addLoaded);
       if (!res.ok) return res;
     }
 
-    onProgress({ id, status: 'done', loaded: groupTotal, total: groupTotal, speed: 0 });
+    const doneTotal = groupLoaded || groupTotal;
+    onProgress({ id, status: 'done', loaded: doneTotal,
+      total: groupTotalKnown ? groupTotal : doneTotal, speed: 0 });
     return { ok: true, path: planned[0].destPath, files: planned.map((p) => p.destPath) };
   } finally {
     activeDownloads.delete(id);
@@ -570,6 +599,180 @@ function buildDownloadEntries(task) {
     }];
   }
   return [];
+}
+
+// Download one file in parallel HTTP Range segments, then merge.
+// Range support is verified per segment; any 200 response triggers a clean
+// fallback to the original single-stream downloader.
+async function downloadOneFileMulti(p, ctrl, conflict, onProgress, setBase) {
+  const destPath = p.destPath;
+  const partPath = p.partPath;
+  const url = p.url;
+
+  const info = await headFileInfo(url);
+  const total = info.length || p.size || 0;
+  const rangeOk = /bytes/i.test(info.acceptRanges || '');
+  if (!total || total < MIN_MULTI_BYTES || !rangeOk) {
+    return downloadOneFile(p, ctrl, conflict, onProgress, setBase);
+  }
+
+  const wanted = Math.max(1, Math.min(16, Math.floor(Number(p.threads) || 1)));
+  const n = Math.min(wanted, Math.max(1, Math.ceil(total / MIN_SEGMENT_BYTES)));
+  const segSize = Math.ceil(total / n);
+  const segPaths = Array.from({ length: n }, (_, i) => partPath + '.seg' + i);
+  const segLoaded = new Array(n).fill(0);
+
+  // A leftover legacy single-stream .part is not valid segment state.
+  if (fs.existsSync(partPath) && !segPaths.some((sp) => fs.existsSync(sp))) {
+    try { fs.unlinkSync(partPath); } catch (e) { /* ignore */ }
+  }
+  for (let i = 0; i < n; i++) {
+    const start = i * segSize;
+    const end = Math.min(total - 1, (i + 1) * segSize - 1);
+    const len = end - start + 1;
+    try { segLoaded[i] = Math.min(len, fs.statSync(segPaths[i]).size); }
+    catch (e) { segLoaded[i] = 0; }
+  }
+
+  let rangeRejected = false;
+  let lastReport = Date.now();
+  let lastLoaded = segLoaded.reduce((a, b) => a + b, 0);
+  const streams = [];
+  const report = () => {
+    const now = Date.now();
+    const sum = segLoaded.reduce((a, b) => a + b, 0);
+    if (now - lastReport >= 400) {
+      const speed = Math.max(0, Math.round((sum - lastLoaded) / ((now - lastReport) / 1000)));
+      onProgress(sum, total, speed);
+      lastReport = now; lastLoaded = sum;
+    }
+  };
+  const timer = setInterval(report, 400);
+
+  const downloadSegment = async (i) => {
+    const start = i * segSize;
+    const end = Math.min(total - 1, (i + 1) * segSize - 1);
+    const len = end - start + 1;
+    const segPath = segPaths[i];
+    for (let attempt = 0; attempt <= 3; attempt++) {
+      if (ctrl.cancelled || rangeRejected) return;
+      // Refresh from disk on retries so a truncated write never skips bytes.
+      try { segLoaded[i] = Math.min(len, fs.statSync(segPath).size); }
+      catch (e) { segLoaded[i] = 0; }
+      const already = segLoaded[i];
+      if (already >= len) return;
+      const from = start + already;
+      const headers = { 'User-Agent': USER_AGENT, ...authHeaders(hfToken, url), Range: 'bytes=' + from + '-' + end };
+      let res;
+      try { res = await requestOnce(url, { headers }); }
+      catch (e) { if (attempt === 3) throw e; continue; }
+      if (res.statusCode === 206) {
+        const m = String(res.headers['content-range'] || '').match(/bytes (\d+)-(\d+)\/(\d+)/);
+        if (m && Number(m[1]) !== from) { res.resume(); continue; }
+      } else if (res.statusCode === 200) {
+        res.resume(); rangeRejected = true; return;
+      } else {
+        res.resume();
+        if (attempt === 3) throw new Error('segment HTTP ' + res.statusCode);
+        continue;
+      }
+
+      const result = await new Promise((resolve) => {
+        let settled = false;
+        let watchdog = null;
+        const finish = (kind, extra) => {
+          if (settled) return;
+          settled = true;
+          if (watchdog) clearInterval(watchdog);
+          resolve({ kind, ...extra });
+        };
+        const stream = fs.createWriteStream(segPath, { flags: already > 0 ? 'a' : 'w' });
+        streams.push(res);
+        let written = 0;
+        let lastDataAt = Date.now();
+        (async () => {
+          try {
+            for await (const chunk of res) {
+              if (ctrl.cancelled || rangeRejected) { finish('cancel'); return; }
+              lastDataAt = Date.now();
+              let piece = chunk;
+              if (written + piece.length > len) piece = piece.slice(0, len - written);
+              if (!piece.length) break;
+              await new Promise((ok, bad) => {
+                const onErr = (e) => { stream.removeListener('drain', onDrain); bad(e); };
+                const onDrain = () => { stream.removeListener('error', onErr); ok(); };
+                stream.once('drain', onDrain);
+                stream.once('error', onErr);
+                if (stream.write(piece)) {
+                  stream.removeListener('drain', onDrain);
+                  stream.removeListener('error', onErr);
+                  ok();
+                }
+              });
+              written += piece.length;
+              segLoaded[i] = Math.min(len, already + written);
+              if (written >= len) break;
+            }
+            await new Promise((ok, bad) => { stream.once('error', bad); stream.end(ok); });
+            finish('ok', { written });
+          } catch (e) {
+            try { stream.destroy(); } catch (_) { /* ignore */ }
+            finish('error', { error: e });
+          }
+        })();
+        watchdog = setInterval(() => {
+          if (ctrl.cancelled || rangeRejected) { res.destroy(); return finish('cancel'); }
+          if (Date.now() - lastDataAt < 8000) return;
+          res.destroy();
+          finish('stall');
+        }, 2000);
+      });
+      const at = streams.indexOf(res);
+      if (at >= 0) streams.splice(at, 1);
+      if (result.kind === 'cancel') return;
+      if (result.kind === 'ok') return;
+      if (attempt === 3) throw result.error || new Error('segment stalled');
+    }
+  };
+
+  try {
+    await Promise.all(Array.from({ length: n }, (_, i) => downloadSegment(i)));
+  } finally {
+    clearInterval(timer);
+  }
+
+  report();
+  if (ctrl.cancelled) return { ok: false, cancelled: true };
+  if (rangeRejected) {
+    for (const sp of segPaths) { try { fs.unlinkSync(sp); } catch (e) { /* ignore */ } }
+    return downloadOneFile(p, ctrl, conflict, onProgress, setBase);
+  }
+
+  // Merge segments in order; delete each as soon as it is copied.
+  const out = fs.createWriteStream(partPath, { flags: 'w' });
+  try {
+    for (let i = 0; i < n; i++) {
+      await new Promise((resolve, reject) => {
+        const rs = fs.createReadStream(segPaths[i], { highWaterMark: 1024 * 1024 });
+        rs.on('error', reject);
+        rs.on('end', resolve);
+        rs.pipe(out, { end: false });
+      });
+      try { fs.unlinkSync(segPaths[i]); } catch (e) { /* ignore */ }
+    }
+    await new Promise((resolve, reject) => {
+      out.once('error', reject);
+      out.end(resolve);
+    });
+  } catch (e) {
+    try { out.destroy(); } catch (_) { /* ignore */ }
+    throw e;
+  }
+
+  fs.renameSync(partPath, destPath);
+  setBase(total);
+  onProgress(total, total, 0);
+  return { ok: true };
 }
 
 // Download one file with resume / stall-retry; returns { ok, cancelled }.
@@ -728,7 +931,8 @@ function pauseDownload(id) {
   const ctrl = activeDownloads.get(id);
   if (ctrl) {
     ctrl.paused = true;
-    if (ctrl.stream && typeof ctrl.stream.pause === 'function') ctrl.stream.pause();
+    const all = (ctrl.streams || []).concat(ctrl.stream ? [ctrl.stream] : []);
+    all.forEach((s) => { if (s && typeof s.pause === 'function') s.pause(); });
     return true;
   }
   return false;
@@ -738,7 +942,8 @@ function resumeDownload(id) {
   const ctrl = activeDownloads.get(id);
   if (ctrl) {
     ctrl.paused = false;
-    if (ctrl.stream && typeof ctrl.stream.resume === 'function') ctrl.stream.resume();
+    const all = (ctrl.streams || []).concat(ctrl.stream ? [ctrl.stream] : []);
+    all.forEach((s) => { if (s && typeof s.resume === 'function') s.resume(); });
     ctrl.pauseResolvers.forEach((r) => r());
     ctrl.pauseResolvers = [];
     return true;
@@ -851,6 +1056,8 @@ module.exports = {
   safeFileName,
   containedPath,
   downloadFile,
+  setDownloadThreads,
+  getDownloadThreads,
   cancelDownload,
   pauseDownload,
   resumeDownload,
