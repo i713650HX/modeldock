@@ -4,12 +4,14 @@ const path = require('path');
 const os = require('os');
 const { parseGGUF } = require('./gguf');
 const logger = require('./logger');
+const apiServer = require('./api-server');
+const modelCheck = require('./model-check');
 
 let mainWindow;
 const APP_VERSION = app.getVersion();
 // Public download URL for the optional CUDA component pack. Change this one
 // line if the zip is mirrored to another host (e.g. a China-friendly CDN).
-const CUDA_PACK_URL = 'https://github.com/i713650HX/modellodge/releases/download/v2.4.0/ModelLodge-CUDA12-Component.zip';
+const CUDA_PACK_URL = 'https://github.com/i713650HX/modellodge/releases/download/v2.5.0/ModelLodge-CUDA12-Component.zip';
 function emitFileProgress(data) {
   for (const w of BrowserWindow.getAllWindows()) {
     try { w.webContents.send('file-progress', data); } catch (_) {}
@@ -40,7 +42,9 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding');
 logger.pruneOldLogs();
 logger.info('=== ModelLodge ' + APP_VERSION + ' starting ===');
 app.on('before-quit', () => {
-  // Kill the bundled llama-server so it never lingers holding GPU memory/port.
+  // Stop the optional API server and kill the bundled llama-server so neither
+  // lingers holding a port or GPU memory.
+  try { apiServer.stopServer(); } catch (_) {}
   try { require('./engine').stopEngine(); } catch (_) {}
   try { logger.flush(); } catch (_) {}
 });
@@ -171,6 +175,17 @@ app.whenReady().then(() => {
     buildMenu();
     createTray();
   }
+  // Restore the OpenAI-compatible API server if the user left it enabled.
+  try {
+    apiServer.restore({
+      enabled: !!(appSettings.apiServer && appSettings.apiServer.enabled),
+      lan: !!(appSettings.apiServer && appSettings.apiServer.lan),
+      port: (appSettings.apiServer && appSettings.apiServer.port) || 1234,
+      token: appSettings.apiServer && appSettings.apiServer.token,
+    });
+    // Persist a freshly generated token on first enable.
+    apiServer.status();
+  } catch (e) { logger.error('api-server restore failed', e); }
 
   app.on('activate', () => {
     if (mainWindow) { mainWindow.show(); mainWindow.focus(); }
@@ -696,7 +711,7 @@ const downloader = require('./downloader');
 const chat = require('./chat');
 const engine = require('./engine');
 const websearch = require('./websearch');
-const { downloadFile, searchModels, getModelFiles, getModelDetail, getReadme, buildDownloadOptions, cancelDownload, pauseDownload, resumeDownload, setHfToken, setProxy: setDownloaderProxy, testMirrorSpeed } = downloader;
+const { downloadFile, searchModels, getModelFiles, getModelDetail, getReadme, buildDownloadOptions, cancelDownload, pauseDownload, resumeDownload, setHfToken, setDownloadThreads, setProxy: setDownloaderProxy, testMirrorSpeed } = downloader;
 // Apply proxy to both the downloader and web search in one place.
 function setProxy(url) {
   setDownloaderProxy(url);
@@ -914,6 +929,8 @@ if (typeof appSettings.scanExcludes === 'string' && appSettings.scanExcludes.tri
     appSettings.scanExcludes.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean)
   );
 }
+// Apply the persisted segmented-download thread count at startup.
+setDownloadThreads(appSettings.downloadThreads || 8);
 
 ipcMain.handle('load-settings', async () => ({
   scanDepth,
@@ -921,6 +938,14 @@ ipcMain.handle('load-settings', async () => ({
   backendPreference: appSettings.backendPreference || 'auto',
   proxy: appSettings.proxy || '', conflict: appSettings.conflict || 'skip',
   concurrent: appSettings.concurrent || 2, theme: appSettings.theme || 'light',
+  downloadThreads: appSettings.downloadThreads || 8,
+  lang: appSettings.lang || 'zh',
+  cols: appSettings.cols || null,
+  apiServer: {
+    enabled: !!(appSettings.apiServer && appSettings.apiServer.enabled),
+    lan: !!(appSettings.apiServer && appSettings.apiServer.lan),
+    port: (appSettings.apiServer && appSettings.apiServer.port) || 1234,
+  },
 }));
 
 ipcMain.handle('save-settings', async (event, settings) => {
@@ -948,9 +973,15 @@ ipcMain.handle('save-settings', async (event, settings) => {
     if (settings.concurrent >= 1 && settings.concurrent <= 8) {
       appSettings.concurrent = settings.concurrent;
     }
+    if (settings.downloadThreads >= 1 && settings.downloadThreads <= 16) {
+      appSettings.downloadThreads = Math.floor(settings.downloadThreads);
+      setDownloadThreads(appSettings.downloadThreads);
+    }
     if (['light', 'dark', 'system'].includes(settings.theme)) {
       appSettings.theme = settings.theme;
     }
+    if (['zh', 'en', 'ja'].includes(settings.lang)) appSettings.lang = settings.lang;
+    if (settings.cols && typeof settings.cols === 'object') appSettings.cols = settings.cols;
     fs.writeFileSync(settingsPath, JSON.stringify(appSettings, null, 2), 'utf8');
     return true;
   } catch (e) {
@@ -1585,6 +1616,76 @@ ipcMain.handle('cuda-pack-remove', async () => {
   }
 });
 
+// ---- OpenAI-compatible API server (stable port + token auth) ----
+ipcMain.handle('api-server-status', async () => {
+  try { return { ok: true, ...apiServer.status() }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+// next: { enabled, lan, port, regenerateToken }. Persists to settings.json.
+ipcMain.handle('api-server-configure', async (event, next) => {
+  try {
+    if (!next || typeof next !== 'object') return { ok: false, error: 'invalid config' };
+    // Never let the renderer set the token directly; only regenerate it here.
+    const cfgIn = {
+      port: next.port,
+      lan: !!next.lan,
+      enabled: !!next.enabled,
+      token: next.regenerateToken ? apiServer.regenerateToken() : undefined,
+    };
+    const r = apiServer.configure(cfgIn);
+    const st = apiServer.status();
+    appSettings.apiServer = {
+      enabled: st.enabled, lan: st.lan, port: st.port, token: st.token,
+    };
+    fs.writeFileSync(settingsPath, JSON.stringify(appSettings, null, 2), 'utf8');
+    return { ok: r.ok, error: r.error || st.error || '', status: st };
+  } catch (e) {
+    logger.error('api-server-configure failed', e);
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('api-server-token-regenerate', async () => {
+  try {
+    const token = apiServer.regenerateToken();
+    const st = apiServer.status();
+    appSettings.apiServer = {
+      enabled: st.enabled, lan: st.lan, port: st.port, token,
+    };
+    fs.writeFileSync(settingsPath, JSON.stringify(appSettings, null, 2), 'utf8');
+    return { ok: true, token };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ---- Model health check (tier probe + per-model profile) ----
+ipcMain.handle('model-check', async (event, modelPath, opts) => {
+  try {
+    const sender = event.sender;
+    const report = await modelCheck.runCheck(modelPath, opts || {}, (p) => {
+      if (!sender.isDestroyed()) sender.send('model-check-progress', p);
+    });
+    return { ok: true, report };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('model-check-cancel', async () => {
+  try { modelCheck.cancelCheck(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('model-profile-get', async (event, modelPath) => {
+  try { return { ok: true, profile: modelCheck.getProfile(app.getPath('userData'), modelPath) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('model-profile-save', async (event, modelPath, profile) => {
+  try {
+    const saved = modelCheck.putProfile(app.getPath('userData'), modelPath, profile || {});
+    return { ok: true, profile: saved };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('model-profile-remove', async (event, modelPath) => {
+  try { modelCheck.removeProfile(app.getPath('userData'), modelPath); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
 // Start the built-in engine on a GGUF file.
 ipcMain.handle('engine-start', async (event, modelPath, opts) => {
   try {
@@ -1650,6 +1751,15 @@ ipcMain.handle('engine-chat', async (event, messages, opts) => {
 ipcMain.handle('chat-start-ollama', async () => {
   try {
     return await chat.startOllamaService();
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Clear a stuck Ollama CUDA context (cudaMalloc fails while VRAM is free).
+ipcMain.handle('chat-restart-ollama', async () => {
+  try {
+    return await chat.restartOllamaService();
   } catch (err) {
     return { ok: false, error: err.message };
   }
