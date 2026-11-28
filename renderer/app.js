@@ -17,6 +17,7 @@ const state = {
   view: 'all',
   arch: '',
   quant: '',
+  fitOnly: false,
   currentModel: null,
   // download state
   hfModels: [],
@@ -78,6 +79,38 @@ const el = {
   hfSourceSelect: document.getElementById('hf-source-select'),
   hfResults: document.getElementById('hf-results'),
   hfHint: document.getElementById('hf-hint'),
+  modelDetail: document.getElementById('model-detail'),
+  detailEmpty: document.getElementById('detail-empty'),
+  mdTitle: document.getElementById('md-title'),
+  mdStats: document.getElementById('md-stats'),
+  mdDesc: document.getElementById('md-desc'),
+  mdTags: document.getElementById('md-tags'),
+  mdOptions: document.getElementById('md-options'),
+  mdReadme: document.getElementById('md-readme'),
+  chatView: document.getElementById('chat-view'),
+  chatBackends: document.getElementById('chat-backends'),
+  chatModelSelect: document.getElementById('chat-model-select'),
+  chatMessages: document.getElementById('chat-messages'),
+  chatInput: document.getElementById('chat-input'),
+  chatSend: document.getElementById('btn-chat-send'),
+  chatStop: document.getElementById('btn-chat-stop'),
+  chatStatus: document.getElementById('chat-status'),
+  chatTemp: document.getElementById('chat-temp'),
+  chatTempVal: document.getElementById('chat-temp-val'),
+  chatCtx: document.getElementById('chat-ctx'),
+  chatGpu: document.getElementById('chat-gpu'),
+  chatNgl: document.getElementById('chat-ngl'),
+  chatBackendPref: document.getElementById('chat-backend-pref'),
+  chatVram: document.getElementById('chat-vram'),
+  chatVramText: document.getElementById('chat-vram-text'),
+  chatVramFill: document.getElementById('chat-vram-fill'),
+  chatVramWarn: document.getElementById('chat-vram-warn'),
+  chatCudaHint: document.getElementById('chat-cuda-hint'),
+  fileProgress: document.getElementById('file-progress'),
+  fileProgressName: document.getElementById('file-progress-name'),
+  fileProgressPct: document.getElementById('file-progress-pct'),
+  fileProgressFill: document.getElementById('file-progress-fill'),
+  fileProgressEta: document.getElementById('file-progress-eta'),
   downloadQueue: document.getElementById('download-queue'),
   downloadCount: document.getElementById('download-count'),
   downloadDirText: document.getElementById('download-dir-text'),
@@ -186,6 +219,20 @@ function showToast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.toast.classList.remove('show'), 2200);
 }
+
+// Long-running file work (SHA256 / cross-drive move) shows a real progress bar.
+let progressHideTimer = null;
+if (ML.onFileProgress) ML.onFileProgress((p) => {
+  if (!el.fileProgress || !p) return;
+  clearTimeout(progressHideTimer);
+  el.fileProgress.classList.remove('hidden');
+  const pct = Math.max(0, Math.min(100, Math.round((p.pct || 0) * 100)));
+  el.fileProgressName.textContent = (p.kind === 'sha256' ? '校验 ' : '移动 ') + (p.name || '');
+  el.fileProgressPct.textContent = pct + '%';
+  el.fileProgressFill.style.width = pct + '%';
+  el.fileProgressEta.textContent = p.eta > 0 ? ('预计剩余 ' + p.eta + ' 秒') : '';
+  if (pct >= 100) progressHideTimer = setTimeout(() => el.fileProgress.classList.add('hidden'), 1200);
+});
 
 // ---- GPU fit assessment (mirrors vram.js logic for instant UI) ----
 function assessFitLocal(modelBytes, gpuOverride) {
@@ -384,6 +431,13 @@ function getVisibleModels() {
   if (state.quant) {
     list = list.filter((m) => m.meta && m.meta.quantization === state.quant);
   }
+  if (state.fitOnly) {
+    // Hide versions that cannot fit in the fastest discrete GPU at all.
+    list = list.filter((m) => {
+      const g = state.gpus.find((x) => !x.integrated) || state.gpus[0];
+      return g ? assessFitLocal(m.size, g).level !== 'bad' : true;
+    });
+  }
   if (state.search.trim()) {
     const q = state.search.trim().toLowerCase();
     // Fuzzy: subsequence match ("qwen7b" matches "qwen2.5-7b-instruct")
@@ -546,11 +600,20 @@ function findModel(p) {
   return state.models.find((m) => m.path === p) || null;
 }
 
+// Display-only command preview. The real engine launch uses spawn(exe, args[])
+// in engine.js (never a concatenated command line), so spaces / CJK paths are safe.
+function quoteWinArg(arg) {
+  const s = String(arg);
+  return /^[\w.\-]+$/.test(s) ? s : '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
 function buildCommands(m) {
-  const p = '"' + m.path.replace(/"/g, '\\"') + '"';
-  const server = 'llama-server -m ' + p + ' --ctx-size ' + ((m.meta && m.meta.contextLength) || 4096);
-  const ollama = 'ollama create mymodel -f Modelfile  # Modelfile: FROM ' + p;
-  return { server, ollama };
+  const ctx = (m.meta && m.meta.contextLength) || 4096;
+  const serverArgs = ['llama-server', '-m', m.path, '--ctx-size', String(ctx)].map(quoteWinArg).join(' ');
+  const ollamaArgs = ['ollama', 'create', 'mymodel', '-f', 'Modelfile'].map(quoteWinArg).join(' ');
+  return {
+    server: serverArgs,
+    ollama: ollamaArgs + '  # Modelfile: FROM ' + quoteWinArg(m.path),
+  };
 }
 
 // ---- Runtime detection / one-click launch ----
@@ -586,7 +649,7 @@ async function renderRuntimes(m) {
         showToast('已在浏览器打开 ' + rt.name + ' 下载页');
         return;
       }
-      btn.disabled = true; btn.textContent = '启动中...';
+      btn.disabled = true; btn.textContent = t('chat.starting');
       const ctx = (m.meta && m.meta.contextLength) || 4096;
       const r = await ML.launchModel(rt.key, m.path, { ctx, name: m.name.replace(/\.gguf$/i, '').replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase() });
       btn.disabled = false; btn.textContent = '一键启动';
@@ -710,11 +773,22 @@ document.querySelectorAll('.nav-item').forEach((item) => {
     document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
     item.classList.add('active');
     state.view = item.getAttribute('data-view');
+    el.libraryView.classList.add('hidden');
+    el.downloadView.classList.add('hidden');
+    el.chatView.classList.add('hidden');
+    const toolsView = document.getElementById('tools-view');
+    if (toolsView) toolsView.classList.add('hidden');
     if (state.view === 'download') {
-      el.libraryView.classList.add('hidden');
       el.downloadView.classList.remove('hidden');
+    } else if (state.view === 'chat') {
+      el.chatView.classList.remove('hidden');
+      initChatView();
+    } else if (state.view === 'tools') {
+      if (toolsView) {
+        toolsView.classList.remove('hidden');
+        initToolsView();
+      }
     } else {
-      el.downloadView.classList.add('hidden');
       el.libraryView.classList.remove('hidden');
       renderModels();
     }
@@ -855,6 +929,8 @@ async function openSettings() {
   try {
     const settings = await ML.loadSettings();
     if (settings && settings.scanDepth) el.settingsDepth.value = String(settings.scanDepth);
+    const ex = document.getElementById('settings-excludes');
+    if (ex && settings && settings.scanExcludes) ex.value = settings.scanExcludes;
     const hasToken = await ML.hasSecret('hfToken');
     el.settingsHfToken.value = '';
     el.settingsTokenStatus.textContent = hasToken ? '状态：已保存 Token（留空并保存可清除）' : '状态：未设置';
@@ -936,6 +1012,99 @@ el.settingsDepth.addEventListener('change', async () => {
   showToast(ok ? '扫描深度已保存，点刷新生效' : '保存失败');
 });
 
+const settingsExcludes = document.getElementById('settings-excludes');
+if (settingsExcludes) settingsExcludes.addEventListener('change', async () => {
+  const ok = await ML.saveSettings({ scanExcludes: settingsExcludes.value });
+  showToast(ok ? '排除规则已保存，点刷新生效' : '保存失败');
+});
+
+const btnDiagnostics = document.getElementById('settings-diagnostics');
+if (btnDiagnostics) btnDiagnostics.addEventListener('click', async () => {
+  const box = document.getElementById('settings-data-result');
+  box.textContent = '正在打包...';
+  try {
+    const r = await ML.exportDiagnostics();
+    box.textContent = r.ok ? ('诊断包已保存到桌面：' + r.path) : ('失败：' + r.error);
+  } catch (e) { box.textContent = '失败：' + e.message; }
+});
+
+const btnCleanEngines = document.getElementById('settings-clean-engines');
+if (btnCleanEngines) btnCleanEngines.addEventListener('click', async () => {
+  if (!window.confirm('只删除软件自己留下的旧引擎缓存，不影响当前引擎和模型文件。继续？')) return;
+  const box = document.getElementById('settings-data-result');
+  box.textContent = '清理中...';
+  try {
+    const r = await ML.cleanOldEngines();
+    box.textContent = r.ok
+      ? ('已清理 ' + r.removed.length + ' 处旧缓存，释放 ' + formatSize(r.freedBytes))
+      : ('失败：' + r.error);
+  } catch (e) { box.textContent = '失败：' + e.message; }
+});
+
+// Optional CUDA component pack (downloaded separately, main installer stays small).
+async function refreshCudaPackStatus() {
+  const box = document.getElementById('cuda-pack-status');
+  if (!box || !ML.cudaPackStatus) return;
+  try {
+    const r = await ML.cudaPackStatus();
+    if (!r.ok) { box.textContent = '状态检测失败：' + r.error; return; }
+    const lines = [];
+    if (r.installed) {
+      lines.push('已安装 CUDA 组件包（' + formatSize(r.bytes) + '）：' + r.dir);
+      if (r.hasRuntime === false) lines.push('注意：组件包缺少运行时 DLL，CUDA 可能无法启动');
+    } else {
+      lines.push('未安装 CUDA 组件包。当前使用本机已有后端或 Vulkan / CPU。');
+    }
+    if (r.driverVersion) lines.push('NVIDIA 驱动 ' + r.driverVersion + '（组件包要求 525+，建议 570+）');
+    if (r.driverWarning) lines.push(r.driverWarning);
+    box.textContent = lines.join('　');
+  } catch (e) { box.textContent = '状态检测失败：' + e.message; }
+}
+
+const btnCudaDownload = document.getElementById('cuda-pack-download');
+if (btnCudaDownload) btnCudaDownload.addEventListener('click', async () => {
+  const box = document.getElementById('cuda-pack-result');
+  box.textContent = '正在打开下载页面...';
+  try {
+    const r = await ML.cudaPackDownload();
+    box.textContent = r.ok
+      ? '已在浏览器打开组件包下载页（约 713 MB）。下载完成后点「导入 CUDA 组件包」选择该 zip。'
+      : ('打开失败：' + (r.error || '未知错误'));
+  } catch (e) { box.textContent = '打开失败：' + e.message; }
+});
+
+const btnCudaImport = document.getElementById('cuda-pack-import');
+if (btnCudaImport) btnCudaImport.addEventListener('click', async () => {
+  const box = document.getElementById('cuda-pack-result');
+  box.textContent = '正在导入组件包...';
+  try {
+    const r = await ML.cudaPackImport();
+    if (r.canceled) { box.textContent = '已取消'; return; }
+    box.textContent = r.ok ? (r.message + '。' + r.dir) : ('失败：' + r.error);
+  } catch (e) { box.textContent = '失败：' + e.message; }
+  await refreshCudaPackStatus();
+});
+
+const btnCudaRemove = document.getElementById('cuda-pack-remove');
+if (btnCudaRemove) btnCudaRemove.addEventListener('click', async () => {
+  if (!window.confirm('卸载已安装的 CUDA 组件包？之后会回退到 Vulkan / CPU。')) return;
+  const box = document.getElementById('cuda-pack-result');
+  try {
+    const r = await ML.cudaPackRemove();
+    box.textContent = r.ok ? '已卸载 CUDA 组件包，重启软件后生效' : ('失败：' + r.error);
+  } catch (e) { box.textContent = '失败：' + e.message; }
+  await refreshCudaPackStatus();
+});
+refreshCudaPackStatus();
+
+const btnFitOnly = document.getElementById('btn-fit-only');
+if (btnFitOnly) btnFitOnly.addEventListener('click', () => {
+  state.fitOnly = !state.fitOnly;
+  btnFitOnly.classList.toggle('active', state.fitOnly);
+  renderModels();
+  showToast(state.fitOnly ? '只显示本机显存能跑的版本' : '显示全部版本');
+});
+
 document.getElementById('btn-export').addEventListener('click', exportCsv);
 
 document.getElementById('btn-calc-sha').addEventListener('click', async () => {
@@ -988,10 +1157,6 @@ el.detailSha.addEventListener('click', async () => {
 document.getElementById('hf-search-btn').addEventListener('click', doSearch);
 el.hfSearchInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') doSearch();
-});
-document.getElementById('direct-url-btn').addEventListener('click', startDirectDownload);
-document.getElementById('direct-url-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') startDirectDownload();
 });
 document.getElementById('btn-pick-download-dir').addEventListener('click', async () => {
   const dir = await ML.pickDownloadDir();
@@ -1105,49 +1270,42 @@ ML.onMenu((evt) => {
 });
 
 // ---- Featured model catalog (static, no server dependency) ----
-// Featured models map directly to ModelScope GGUF repos (domestic-friendly, no search API needed).
+// These are well-known GGUF repos; clicking one jumps straight to its detail page.
 const FEATURED = [
-  { label: 'Qwen2.5 7B（中文强）', repo: 'Qwen/Qwen2.5-7B-Instruct-GGUF' },
+  { label: 'Qwen2.5 7B', repo: 'Qwen/Qwen2.5-7B-Instruct-GGUF' },
   { label: 'Qwen2.5 14B', repo: 'Qwen/Qwen2.5-14B-Instruct-GGUF' },
-  { label: 'Gemma 3 4B（轻量）', repo: 'ggml-org/gemma-3-4b-it-GGUF' },
+  { label: 'Qwen2.5 3B', repo: 'Qwen/Qwen2.5-3B-Instruct-GGUF' },
+  { label: 'Gemma 3 4B', repo: 'ggml-org/gemma-3-4b-it-GGUF' },
   { label: 'DeepSeek R1 7B', repo: 'bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF' },
   { label: 'Llama 3.2 3B', repo: 'bartowski/Llama-3.2-3B-Instruct-GGUF' },
-  { label: 'Qwen2.5 Coder（代码）', repo: 'Qwen/Qwen2.5-Coder-7B-Instruct-GGUF' },
+  { label: 'Qwen2.5 Coder', repo: 'Qwen/Qwen2.5-Coder-7B-Instruct-GGUF' },
 ];
 (function renderFeatured() {
   const box = document.getElementById('featured-chips');
   if (!box) return;
   FEATURED.forEach(item => {
     const btn = document.createElement('button');
-    btn.className = 'secondary-btn small-btn';
+    btn.className = 'secondary-btn';
     btn.textContent = item.label;
-    btn.title = '直接从 ModelScope 打开：' + item.repo;
+    btn.title = item.repo;
     btn.addEventListener('click', () => {
-      // Open the repo's file list on the domestic ModelScope source directly.
-      el.hfSourceSelect.value = 'ms';
-      showHfFiles({ id: item.repo, name: item.repo.split('/').pop(), source: 'ms' }, 'master');
+      openModelDetail({ id: item.repo, name: item.repo.split('/').pop(), author: item.repo.split('/')[0], source: 'mirror' });
     });
     box.appendChild(btn);
   });
 })();
 
-// ---- Hugging Face downloader UI ----
+// ---- Model browse UI (LM-Studio style) ----
+// Flow: type a name -> search -> click a result -> pick a quantization -> Download.
 async function doSearch() {
   const q = el.hfSearchInput.value.trim();
   if (!q) { showToast('请输入模型名称'); return; }
   const source = el.hfSourceSelect.value;
-  // ModelScope search API requires auth; accept a repo ID (ns/name) and go straight to its file list.
-  if (source === 'ms') {
-    if (!/^[\w.\-]+\/[\w.\-]+$/.test(q)) {
-      showToast('魔搭源请粘贴模型 ID（格式：命名空间/模型名，如 qwen/Qwen2.5-7B-Instruct）');
-      return;
-    }
-    await showHfFiles({ id: q, name: q.split('/').pop(), source: 'ms' }, 'master');
-    return;
-  }
   const typeFilter = document.getElementById('hf-type-select').value;
   // Try the chosen source first, then fall back to the others (mirror/HF are flaky in CN).
-  const order = [source, ...['mirror', 'hf'].filter(s => s !== source)];
+  const order = source === 'ms'
+    ? ['ms', 'mirror', 'hf']
+    : [source, ...['mirror', 'hf', 'ms'].filter((s) => s !== source)];
   el.hfHint.innerHTML = '<p>' + t('dl.searching') + '</p>';
   el.hfHint.classList.remove('hidden');
   el.hfResults.innerHTML = '';
@@ -1156,109 +1314,209 @@ async function doSearch() {
     try {
       const r = await ML.hfSearch(q, src, typeFilter);
       if (!r.ok) throw new Error(r.error);
-      state.hfModels = r.models;
+      state.hfModels = r.models || [];
       state.hfSelected = null;
       el.hfHint.classList.add('hidden');
       renderHfResults();
-      if (src !== source) showToast('已自动切换「' + (src === 'mirror' ? '国内镜像' : 'Hugging Face') + '」源完成搜索');
+      // Gated model names must not be silently degraded to same-named
+      // ModelScope repos — those are usually unrelated community uploads.
+      if (r.gatedHint && src !== 'ms') {
+        el.hfHint.innerHTML = '<h2>' + t('dl.noResult') + '</h2><p>' + esc(r.gatedHint) + '</p>';
+        el.hfHint.classList.remove('hidden');
+        return;
+      }
+      if (src !== source) {
+        const label = src === 'mirror' ? '国内镜像' : (src === 'hf' ? 'Hugging Face' : 'ModelScope 魔搭');
+        showToast('已自动切换「' + label + '」完成搜索');
+      }
+      if (!state.hfModels.length) {
+        el.hfHint.innerHTML = '<h2>' + t('dl.noResult') + '</h2><p>' + t('dl.noResultHint') + '</p>';
+        el.hfHint.classList.remove('hidden');
+      }
       return;
     } catch (err) {
       lastErr = err;
-      el.hfHint.innerHTML = '<p>' + t('dl.searching') + '（切换备用源 ' + (src === 'mirror' ? '国内镜像' : 'Hugging Face') + '...）</p>';
+      const label = src === 'mirror' ? '国内镜像' : (src === 'hf' ? 'Hugging Face' : 'ModelScope 魔搭');
+      el.hfHint.innerHTML = '<p>' + t('dl.searching') + '（切换备用源 ' + label + '...）</p>';
     }
   }
-  el.hfHint.innerHTML = `<h2>${t('dl.searchFail')}</h2><p>${esc(lastErr?.message || '')}</p><p style="margin-top:8px;color:var(--text-tertiary)">建议：改用「ModelScope 魔搭」源粘贴模型 ID，或点下方精选推荐（直接走国内源）。</p>`;
+  el.hfHint.innerHTML = '<h2>' + t('dl.searchFail') + '</h2><p>' + esc(lastErr && lastErr.message || '') + '</p><p style="margin-top:8px;color:var(--text-tertiary)">三个源都试过了。换个关键词，或者点上面的「热门推荐」直接进。</p>';
   el.hfHint.classList.remove('hidden');
 }
 
 function renderHfResults() {
   el.hfResults.innerHTML = '';
-  if (!state.hfModels.length) {
-    el.hfHint.innerHTML = '<h2>' + t('dl.noResult') + '</h2><p>' + t('dl.noResultHint') + '</p>';
-    el.hfHint.classList.remove('hidden');
-    return;
-  }
+  if (!state.hfModels.length) return;
   state.hfModels.forEach((m) => {
     const card = document.createElement('div');
     card.className = 'hf-card' + (state.hfSelected && state.hfSelected.id === m.id ? ' selected' : '');
-    const fmtNum = (n) => n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n);
+    const fmtNum = (n) => n >= 10000 ? (n / 10000).toFixed(1) + 'w' : (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
+    const params = guessParams(m.id);
     card.innerHTML = `
-      <div class="hf-card-title">${esc(m.id)}</div>
+      <div class="hf-card-title">${esc(m.name || m.id)}</div>
       <div class="hf-card-meta">
+        ${m.author ? `<span>${esc(m.author)}</span>` : ''}
+        ${params ? `<span>${params}</span>` : ''}
         <span>下载 ${fmtNum(m.downloads)}</span>
         <span>喜欢 ${fmtNum(m.likes)}</span>
-        ${m.pipeline ? `<span>${esc(m.pipeline)}</span>` : ''}
+        ${m.gated ? '<span class="gated-tag">需 Token</span>' : ''}
       </div>
-      <div class="hf-card-tags">${(m.tags || []).slice(0, 5).map((t) => `<span class="card-tag">${esc(t)}</span>`).join('')}</div>
+      <div class="hf-card-tags">${(m.tags || []).slice(0, 4).map((tg) => `<span class="card-tag">${esc(tg)}</span>`).join('')}</div>
     `;
-    card.addEventListener('click', () => showHfFiles(m));
+    card.addEventListener('click', () => openModelDetail(m));
     el.hfResults.appendChild(card);
   });
 }
 
-async function showHfFiles(m, revision) {
+// Guess a parameter count from the repo name, e.g. "Qwen2.5-7B" -> "7B"
+function guessParams(name) {
+  const m = String(name || '').match(/(?:^|[^0-9.])(\d+(?:\.\d+)?)\s*[bB](?=$|[^a-zA-Z0-9])/);
+  if (m) return m[1] + 'B 参数';
+  return '';
+}
+
+// Open the right-hand detail panel for a model.
+async function openModelDetail(m) {
   state.hfSelected = m;
-  state.hfRevision = revision || (m.source === 'ms' ? 'master' : 'main');
-  el.hfHint.classList.add('hidden');
-  el.hfResults.innerHTML = '<div class="hf-files-wrap"><div class="hf-files-title">加载文件列表...</div></div>';
+  state.hfRevision = m.source === 'ms' ? 'master' : 'main';
+  el.modelDetail.classList.remove('hidden');
+  el.detailEmpty.classList.add('hidden');
+  el.mdTitle.textContent = m.id;
+  el.mdStats.innerHTML = '<span>加载中...</span>';
+  el.mdDesc.textContent = '';
+  el.mdTags.innerHTML = '';
+  el.mdOptions.innerHTML = '<div class="cmd-hint">' + t('md.loading') + '</div>';
+  el.mdReadme.innerHTML = '<div class="cmd-hint">加载中...</div>';
+  renderHfResults();
+
+  // One round trip: metadata + download options. README loads separately in
+  // the background so a slow README endpoint never blocks the quant list.
+  let res;
   try {
-    const r = await ML.hfFiles(m.id, m.source, state.hfRevision);
-    if (!r.ok) throw new Error(r.error);
-    const wrap = document.createElement('div');
-    wrap.className = 'hf-files-wrap';
-    // Quant filter chips (dynamically from files that carry a quant tag)
-    const quants = [...new Map(r.files.filter(f => f.quant).map(f => [f.quant.toUpperCase().trim(), f.quant.toUpperCase().trim()])).values()];
-    const filterChips = quants.length
-      ? '<div class="cmd-hint" style="margin:6px 0">按量化筛选：' + quants.map(q => `<button class="hf-quant-chip" data-q="${esc(q)}">${esc(q)}</button>`).join(' ') + ' <button class="hf-quant-chip" data-q="">全部</button></div>'
-      : '';
-    wrap.innerHTML = `
-      <div class="hf-files-title">
-        <button class="hf-files-back">返回</button>
-        <span>${esc(m.name)} 的文件 (${r.files.length})</span>
-      </div>
-      <div class="cmd-hint" style="margin-bottom:6px">分支/版本：<input id="hf-revision-input" class="detail-input" style="width:180px;display:inline-block" value="${esc(state.hfRevision)}" /> <button id="hf-revision-go" class="secondary-btn small-btn">切换</button></div>
-      ${filterChips}
-      <div class="cmd-hint" style="margin-bottom:10px">模型文件排在前面；可按目录/量化筛选。点击下载保存到设定目录。</div>
-    `;
-    wrap.querySelector('.hf-files-back').addEventListener('click', renderHfResults);
-    wrap.querySelector('#hf-revision-go').addEventListener('click', () => {
-      showHfFiles(m, wrap.querySelector('#hf-revision-input').value.trim());
-    });
-    wrap.querySelectorAll('.hf-quant-chip').forEach(chip => {
-      chip.addEventListener('click', () => {
-        const q = chip.getAttribute('data-q');
-        wrap.querySelectorAll('.hf-file-row').forEach(row => {
-          row.style.display = (!q || (row.getAttribute('data-quant') || '').toUpperCase() === q) ? '' : 'none';
-        });
-      });
-    });
-    if (!r.files.length) {
-      wrap.innerHTML += '<div class="cmd-hint">这个仓库没有可下载的文件。</div>';
-    }
-    r.files.forEach((f) => {
-      const row = document.createElement('div');
-      row.className = 'hf-file-row';
-      row.setAttribute('data-quant', (f.quant || '').toUpperCase());
-      const sizeText = f.size ? formatSize(f.size) : '';
-      row.innerHTML = `
-        <span class="hf-file-name" title="${esc(f.path)}">${esc(f.name)}</span>
-        ${f.quant ? `<span class="hf-file-quant">${esc(f.quant)}</span>` : ''}
-        <span class="card-tag">${esc(f.type || '文件')}</span>
-        ${f.size ? fitBadgeHtml(assessFitLocal(f.size)) : ''}
-        ${sizeText ? `<span class="hf-file-size">${sizeText}</span>` : ''}
-        <button class="hf-file-download">下载</button>
-      `;
-      row.querySelector('.hf-file-download').addEventListener('click', () => {
-        startDownload(m, f);
-      });
-      wrap.appendChild(row);
-    });
-    el.hfResults.innerHTML = '';
-    el.hfResults.appendChild(wrap);
+    res = await ML.modelPage(m.id, m.source, state.hfRevision);
   } catch (err) {
-    el.hfResults.innerHTML = `<div class="hf-files-wrap"><button class="hf-files-back">返回</button><p>加载失败：${esc(err.message)}</p></div>`;
-    el.hfResults.querySelector('.hf-files-back').addEventListener('click', renderHfResults);
+    el.mdStats.innerHTML = '<span style="color:var(--danger)">加载失败：' + esc(err.message) + '</span>';
+    el.mdOptions.innerHTML = '<div class="cmd-hint" style="color:var(--danger)">加载失败：' + esc(err.message) + '</div>';
+    el.mdReadme.innerHTML = '<div class="cmd-hint">加载失败</div>';
+    ML.log('error', 'modelPage failed: ' + (err && err.message));
+    return;
   }
+  if (state.hfSelected && state.hfSelected.id !== m.id) return;
+
+  const d = res.detail;
+  if (d && d.gated && m.source !== 'ms') {
+    let hasToken = false;
+    try { hasToken = await ML.hasSecret('hfToken'); } catch (_) {}
+    el.mdOptions.insertAdjacentHTML('afterbegin',
+      '<div class="gated-banner">这是受限（gated）仓库：需要先在 Hugging Face 网页接受许可并保存 Token' +
+      (hasToken ? '（已保存 Token）' : '（当前未保存 Token）') +
+      '。软件不会自动换成魔搭上的同名仓库。</div>');
+  }
+  if (d) {
+    const fmtNum = (n) => n >= 10000 ? (n / 10000).toFixed(1) + 'w' : (n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
+    const stats = [];
+    stats.push('下载 ' + fmtNum(d.downloads || 0));
+    stats.push('喜欢 ' + fmtNum(d.likes || 0));
+    if (d.lastModified) stats.push('更新于 ' + new Date(d.lastModified).toLocaleDateString('zh-CN'));
+    if (d.contextLength) stats.push('上下文 ' + Math.round(d.contextLength / 1024) + 'K');
+    el.mdStats.innerHTML = stats.map((s) => '<span>' + esc(s) + '</span>').join('');
+    el.mdDesc.textContent = d.description || '';
+    const tags = [];
+    if (d.architecture) tags.push(d.architecture);
+    if (d.license) tags.push(d.license);
+    if (d.baseModel) tags.push('base: ' + d.baseModel);
+    (d.tags || []).slice(0, 8).forEach((tg) => tags.push(tg));
+    el.mdTags.innerHTML = tags.map((tg) => '<span class="card-tag">' + esc(tg) + '</span>').join('');
+  } else {
+    el.mdStats.innerHTML = '<span style="color:var(--danger)">' + t('md.detailFail') + esc(res.detailError || '') + '</span>';
+  }
+
+  if (res.optionsError) {
+    el.mdOptions.innerHTML = '<div class="cmd-hint" style="color:var(--danger)">' + t('md.optionsFail') + esc(res.optionsError) + '</div>';
+  } else {
+    renderDownloadOptions(m, res.options || [], res.otherFiles || []);
+  }
+
+  // README loads in the background (the raw endpoint can be slow on CN mirrors).
+  ML.modelReadme(m.id, m.source, state.hfRevision).then((r) => {
+    if (state.hfSelected && state.hfSelected.id !== m.id) return;
+    if (!r.ok || !r.text) { el.mdReadme.innerHTML = '<div class="cmd-hint">' + t('md.noReadme') + '</div>'; return; }
+    el.mdReadme.innerHTML = renderMarkdown(r.text);
+  }).catch(() => {
+    if (state.hfSelected && state.hfSelected.id !== m.id) return;
+    el.mdReadme.innerHTML = '<div class="cmd-hint">' + t('md.readmeFail') + '</div>';
+  });
+}
+
+function renderDownloadOptions(m, options, otherFiles) {
+  el.mdOptions.innerHTML = '';
+  if (!options.length && !otherFiles.length) {
+    el.mdOptions.innerHTML = '<div class="cmd-hint">' + t('md.noFiles') + '</div>';
+    return;
+  }
+  options.forEach((opt) => {
+    const row = document.createElement('div');
+    row.className = 'md-option';
+    const fit = opt.totalSize ? fitBadgeHtml(assessFitLocal(opt.totalSize)) : '';
+    row.innerHTML = `
+      <div class="md-option-main">
+        <div class="md-option-name">${esc(opt.label)} ${fit}</div>
+        <div class="md-option-sub" title="${esc(opt.filePath)}">${esc(opt.fileName)}${opt.shardCount > 1 ? ' · ' + opt.shardCount + ' 个分片' : ''}</div>
+      </div>
+      <div class="md-option-size">${opt.totalSize ? formatSize(opt.totalSize) : '大小未知'}</div>
+      <button class="primary-btn small-btn" data-i18n="dl.download">下载</button>
+    `;
+    row.querySelector('button').addEventListener('click', () => startOptionDownload(m, opt));
+    el.mdOptions.appendChild(row);
+  });
+  if (otherFiles.length) {
+    const head = document.createElement('div');
+    head.className = 'md-section-title';
+    head.style.marginTop = '12px';
+    head.textContent = t('md.other') + ' (' + otherFiles.length + ')';
+    el.mdOptions.appendChild(head);
+    otherFiles.slice(0, 30).forEach((f) => {
+      const row = document.createElement('div');
+      row.className = 'md-option';
+      row.innerHTML = `
+        <div class="md-option-main">
+          <div class="md-option-name">${esc(f.name)}</div>
+          <div class="md-option-sub" title="${esc(f.path)}">${esc(f.path)}</div>
+        </div>
+        <div class="md-option-size">${f.size ? formatSize(f.size) : ''}</div>
+        <button class="secondary-btn small-btn" data-i18n="dl.download">下载</button>
+      `;
+      row.querySelector('button').addEventListener('click', () => startOptionDownload(m, { files: [f], label: f.name, totalSize: f.size || 0 }));
+      el.mdOptions.appendChild(row);
+    });
+  }
+}
+
+// Minimal markdown -> HTML for the README block.
+function renderMarkdown(text) {
+  const lines = String(text).split('\n');
+  const out = [];
+  let inCode = false;
+  let inFrontMatter = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (i === 0 && line.trim() === '---') { inFrontMatter = true; continue; }
+    if (inFrontMatter) {
+      if (line.trim() === '---') inFrontMatter = false;
+      continue;
+    }
+    if (line.trim().startsWith('```')) {
+      inCode = !inCode;
+      out.push(inCode ? '<pre>' : '</pre>');
+      continue;
+    }
+    if (inCode) { out.push(esc(line)); continue; }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { out.push('<h' + h[1].length + '>' + esc(h[2]) + '</h' + h[1].length + '>'); continue; }
+    if (!line.trim()) { out.push(''); continue; }
+    out.push(esc(line));
+  }
+  return out.join('\n');
 }
 
 function ensureDownloadDir() {
@@ -1326,42 +1584,30 @@ async function runDownload(task, d) {
   renderDownloadQueue();
 }
 
-async function startDownload(model, file) {
+// Start downloading one "download option" (a quantization, possibly split into shards).
+async function startOptionDownload(model, opt) {
   const dir = await ensureDownloadDir();
   if (!dir) { showToast('请选择下载目录'); return; }
-  // check disk space before starting
-  if (file.size) {
-    const space = await ML.checkDiskSpace(dir, file.size * 1.1); // 10% headroom
+  const files = opt.files && opt.files.length ? opt.files : [opt.file].filter(Boolean);
+  if (!files.length) { showToast('没有可下载的文件'); return; }
+  const totalSize = opt.totalSize || files.reduce((s, f) => s + (f.size || 0), 0);
+  // check disk space before starting (10% headroom)
+  if (totalSize) {
+    const space = await ML.checkDiskSpace(dir, totalSize * 1.1);
     if (space.ok && !space.enough) {
-      showToast('磁盘空间不足，需要 ' + formatSize(file.size) + '，可用 ' + formatSize(space.free));
+      showToast('磁盘空间不足，需要 ' + formatSize(totalSize) + '，可用 ' + formatSize(space.free));
       return;
     }
   }
   const id = 'dl-' + (++state.downloadSeq) + '-' + Date.now();
-  const task = { id, repoId: model.id, file, destDir: dir, sourceKey: model.source, kind: 'repo', revision: state.hfRevision || undefined };
-  state.downloads[id] = {
-    id, name: file.name, status: 'pending', loaded: 0, total: file.size || 0, speed: 0, task,
+  const task = {
+    id, repoId: model.id, files, destDir: dir,
+    sourceKey: model.source, kind: 'repo', revision: state.hfRevision || undefined,
   };
-  enqueueDownload(task, state.downloads[id]);
-}
-
-// ---- Direct URL download ----
-async function startDirectDownload() {
-  const input = document.getElementById('direct-url-input');
-  const url = input.value.trim();
-  if (!url) { showToast('请粘贴下载链接'); return; }
-  if (!/^https?:\/\//i.test(url)) { showToast('链接需以 http:// 或 https:// 开头'); return; }
-  const dir = await ensureDownloadDir();
-  if (!dir) { showToast('请选择下载目录'); return; }
-  const id = 'url-' + (++state.downloadSeq) + '-' + Date.now();
-  // infer filename from URL for display
-  let name = 'file-' + Date.now();
-  try {
-    const u = new URL(url);
-    name = decodeURIComponent(u.pathname.split('/').pop()) || name;
-  } catch (e) { /* keep generic name */ }
-  const task = { id, url, fileName: name, destDir: dir, kind: 'url' };
-  state.downloads[id] = { id, name, status: 'pending', loaded: 0, total: 0, speed: 0, task };
+  const displayName = (opt.label && opt.label !== '其它') ? opt.label + ' · ' + files[0].name : files[0].name;
+  state.downloads[id] = {
+    id, name: displayName, status: 'pending', loaded: 0, total: totalSize, speed: 0, task,
+  };
   enqueueDownload(task, state.downloads[id]);
 }
 
@@ -1515,4 +1761,1492 @@ function persistDownloads() {
   saveDownloadsTimer = setTimeout(() => {
     try { ML.saveDownloads(Object.values(state.downloads)); } catch (e) { /* ignore */ }
   }, 500);
+}
+
+// ============================================================
+// AI 对话模块 —— 以「模型」为中心
+//
+// 核心路径：选一个本机 GGUF → 内置引擎直接起 → 开聊。
+// 软件自带 llama.cpp 运行时，用户不需要装 Ollama / LM Studio。
+// 外部后端（Ollama / LM Studio / 外部 llama.cpp）作为可选增强。
+// 全程只连 127.0.0.1。
+// ============================================================
+const chatState = {
+  backends: [],       // 外部后端
+  backend: null,      // 选中的外部后端 key；null = 用内置引擎
+  models: [],         // 外部后端的模型列表
+  model: null,        // 当前模型 key（内置引擎时为模型文件路径）
+  localModels: [],    // 本机 GGUF（内置引擎可直接用）
+  importedModels: [], // 用户从任意路径导入的 GGUF（不依赖已添加文件夹）
+  engineReady: false, // 内置引擎是否可用
+  engineRunning: false,
+  history: [],        // { role, content } — always points at the active session
+  streaming: false,
+  pending: false,
+  // --- work assistant state ---
+  sessions: [],       // [{ id, title, createdAt, updatedAt, messages }]
+  activeSessionId: null,
+  contextFiles: [],   // [{ name, path, content, truncated }] — injected each turn
+  mode: 'general',
+  saveTimer: null,
+};
+
+// Short, concrete system prompts. Small local models follow short instructions
+// far better than long ones — these are deliberately terse.
+const WORK_MODES = {
+  general: '',
+  summary: '你是文档分析助手。严格依据用户提供的资料作答，不要编造。用简洁条目列出要点，最后给出一句结论。',
+  writing: '你是中文写作编辑。保留原意，使表达更清晰、简洁、专业。先给出改写后的完整版本，再用两三句说明改动。',
+  translate: '你是专业翻译。忠实原文、术语准确、表达自然。只输出译文，不解释。',
+  code: '你是资深程序员。只指出真实存在的问题（bug、边界、安全、性能），按严重程度排序，并给出修改后的关键代码。不要空泛建议。',
+  data: '你是数据分析助手。只依据用户提供的数据回答，说明计算口径；数据不足时明确说无法判断，绝不编造数字。',
+};
+
+// Keep a clean copy of the welcome screen so "new chat" can restore it.
+let welcomeTemplate = null;
+try {
+  const w = document.querySelector('#chat-messages .chat-welcome');
+  if (w) welcomeTemplate = w.cloneNode(true);
+} catch (_) { /* ignore */ }
+
+function currentSession() {
+  return chatState.sessions.find((s) => s.id === chatState.activeSessionId) || null;
+}
+
+function createSession() {
+  const s = {
+    id: 's-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+    title: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: [],
+  };
+  chatState.sessions.unshift(s);
+  chatState.activeSessionId = s.id;
+  chatState.history = s.messages;
+  return s;
+}
+
+function syncCurrentSession() {
+  const s = currentSession();
+  if (!s) return;
+  s.messages = chatState.history;
+  if (!s.title) {
+    const first = chatState.history.find((m) => m.role === 'user');
+    s.title = first ? first.content.replace(/\s+/g, ' ').slice(0, 24) : (t('chat.new') || '新对话');
+  }
+  s.updatedAt = Date.now();
+}
+
+function persistSessions(immediate) {
+  syncCurrentSession();
+  const run = async () => {
+    try {
+      await ML.saveChatSessions({ activeId: chatState.activeSessionId, sessions: chatState.sessions });
+    } catch (_) { /* disk write failure must never break chat */ }
+  };
+  if (immediate) return run();
+  if (chatState.saveTimer) clearTimeout(chatState.saveTimer);
+  chatState.saveTimer = setTimeout(run, 600);
+}
+
+function cloneWelcome() {
+  if (!welcomeTemplate) return null;
+  const node = welcomeTemplate.cloneNode(true);
+  node.querySelectorAll('[data-i18n]').forEach((x) => {
+    const v = t(x.getAttribute('data-i18n'));
+    if (v) x.textContent = v;
+  });
+  return node;
+}
+
+function renderHistoryMessages() {
+  if (!el.chatMessages) return;
+  el.chatMessages.innerHTML = '';
+  if (!chatState.history.length) {
+    const w = cloneWelcome();
+    if (w) el.chatMessages.appendChild(w);
+    return;
+  }
+  chatState.history.forEach((m) => appendChatMessage(m.role, m.content));
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+}
+
+function renderChatSessions() {
+  const box = document.getElementById('chat-sessions');
+  if (!box) return;
+  box.innerHTML = '';
+  const sorted = chatState.sessions
+    .slice()
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, 12);
+  if (!sorted.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chat-session-empty';
+    empty.textContent = t('chat.sessionEmpty');
+    box.appendChild(empty);
+    return;
+  }
+  sorted.forEach((s) => {
+    const row = document.createElement('div');
+    row.className = 'chat-session' + (s.id === chatState.activeSessionId ? ' active' : '');
+
+    const title = document.createElement('button');
+    title.className = 'chat-session-title';
+    title.textContent = s.title || (t('chat.new') || '新对话');
+    title.title = title.textContent;
+    title.addEventListener('click', () => switchSession(s.id));
+
+    const del = document.createElement('button');
+    del.className = 'chat-session-del';
+    del.textContent = '×';
+    del.title = t('chat.sessionDeleted');
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteSession(s.id);
+    });
+
+    row.appendChild(title);
+    row.appendChild(del);
+    box.appendChild(row);
+  });
+}
+
+function switchSession(id) {
+  if (chatState.streaming) { showToast(t('chat.busy')); return; }
+  if (id === chatState.activeSessionId) return;
+  persistSessions();
+  const s = chatState.sessions.find((x) => x.id === id);
+  if (!s) return;
+  chatState.activeSessionId = id;
+  chatState.history = Array.isArray(s.messages) ? s.messages : [];
+  // Files belong to a task, not to the whole app — never leak them across chats.
+  chatState.contextFiles = [];
+  renderContextBar();
+  renderChatSessions();
+  renderHistoryMessages();
+  persistSessions(true);
+}
+
+function deleteSession(id) {
+  chatState.sessions = chatState.sessions.filter((s) => s.id !== id);
+  if (chatState.activeSessionId === id) {
+    if (!chatState.sessions.length) createSession();
+    else {
+      chatState.activeSessionId = chatState.sessions[0].id;
+      chatState.history = chatState.sessions[0].messages || [];
+      chatState.contextFiles = [];
+      renderContextBar();
+      renderHistoryMessages();
+    }
+  }
+  renderChatSessions();
+  persistSessions(true);
+  showToast(t('chat.sessionDeleted'));
+}
+
+// System context assembled from work mode + attached files. It is injected as
+// a temporary first message, so it never pollutes the saved chat history.
+function buildWorkContext(searchEnabled) {
+  const parts = [];
+  const modeSelect = document.getElementById('chat-mode');
+  const mode = (modeSelect && modeSelect.value) || chatState.mode || 'general';
+  chatState.mode = mode;
+  const modePrompt = WORK_MODES[mode];
+  if (modePrompt) parts.push(modePrompt);
+
+  // Tool-use protocol. The local model writes a marker, the app executes it,
+  // feeds the real result back, and the model continues. No fake claims.
+  const tools = [
+    '你能调用工具。需要实时资料或要操作电脑时，在回答里只写下面的标记，系统会自动执行并把真实结果返回给你，然后你依据结果继续回答。禁止编造执行结果，禁止说"已执行"除非收到返回的工具结果。',
+    '每次最多调用 2 个工具。标记必须单独一行，不要放进代码块。',
+  ];
+  if (searchEnabled) {
+    tools.push('[[SEARCH:搜索词]] 联网搜索实时资料。涉及新闻、价格、显卡/手机规格、天气、软件版本等时效性问题时必须使用，不能凭记忆回答。搜索词里只能放通用的公开查询关键词，严禁把用户文件、剪贴板、本地路径或任何隐私内容写进搜索词——这些内容会通过搜索引擎发到外网。');
+  } else {
+    tools.push('用户未开启联网，不能搜索；遇到时效性内容就明确说不知道。');
+  }
+  tools.push(
+    '[[ACTION:open_app|notepad]] 打开应用（notepad/calc/explorer/edge/chrome/code/settings/taskmgr）',
+    '[[ACTION:open_url|https://...]] 打开网页；[[ACTION:open_path|完整路径]] 打开文件或文件夹',
+    '[[ACTION:list_dir|路径]] 列出目录文件（路径留空表示用户目录）',
+    '[[ACTION:read_file|完整路径]] 读取文本文件内容；[[ACTION:clipboard_write|内容]] 写入剪贴板',
+    '[[ACTION:system_info]] 查看电脑配置',
+    '[[SCRIPT:PowerShell脚本]] 运行脚本操作电脑。执行前会弹窗让用户确认，用 Write-Output 输出结果。示例：[[SCRIPT:Get-ChildItem $env:USERPROFILE\\Desktop | Select-Object -First 20 Name]]',
+    '[[ACTION:download_software|7zip]] 下载常用软件（7zip/vscode/chrome/firefox/vlc/notepadpp/git/python/ollama/etcher/audacity/mailmaster）'
+  );
+  parts.push(tools.join('\n'));
+  if (chatState.contextFiles.length) {
+    const docs = chatState.contextFiles
+      .map((f) => '【文件：' + f.name + '】\n' + f.content + (f.truncated ? '\n（内容已截断，只能看到前一部分）' : ''))
+      .join('\n\n');
+    parts.push('以下是用户提供的资料。回答必须优先依据这些资料，不要凭空编造；资料里没有的内容要明确说明。\n\n' + docs);
+  }
+  return parts.length ? parts.join('\n\n') : null;
+}
+
+function renderContextBar() {
+  const bar = document.getElementById('chat-context-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  if (!chatState.contextFiles.length) {
+    bar.classList.add('hidden');
+    return;
+  }
+  bar.classList.remove('hidden');
+
+  const label = document.createElement('span');
+  label.className = 'ctx-label';
+  label.textContent = t('chat.contextLabel');
+  bar.appendChild(label);
+
+  chatState.contextFiles.forEach((f, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'ctx-chip';
+    chip.title = f.path || f.name;
+    chip.textContent = f.name;
+    const x = document.createElement('button');
+    x.className = 'ctx-chip-x';
+    x.textContent = '×';
+    x.title = t('chat.clearContext');
+    x.addEventListener('click', () => {
+      chatState.contextFiles.splice(i, 1);
+      renderContextBar();
+    });
+    chip.appendChild(x);
+    bar.appendChild(chip);
+  });
+
+  const clear = document.createElement('button');
+  clear.className = 'ctx-clear';
+  clear.textContent = t('chat.clearContext');
+  clear.addEventListener('click', () => {
+    chatState.contextFiles = [];
+    renderContextBar();
+  });
+  bar.appendChild(clear);
+}
+
+async function ingestContextPaths(paths) {
+  if (!paths || !paths.length || !ML.readContextFiles) return;
+  const r = await ML.readContextFiles(paths);
+  if (!r || !r.ok) return;
+  let added = 0;
+  let failed = 0;
+  r.files.forEach((f) => {
+    if (f.error || !f.content) { failed++; return; }
+    chatState.contextFiles = chatState.contextFiles.filter((x) => x.path !== f.path);
+    chatState.contextFiles.push(f);
+    added++;
+  });
+  renderContextBar();
+  showToast(t('chat.filesAdded') + added + (failed ? '，' + failed + t('chat.fileErrors') : ''));
+}
+
+async function attachContextFiles() {
+  if (!ML.pickContextFiles || !ML.readContextFiles) {
+    showToast(t('chat.importFail'));
+    return;
+  }
+  const picked = await ML.pickContextFiles();
+  if (!picked || !picked.ok || !picked.files || !picked.files.length) return;
+  await ingestContextPaths(picked.files.map((f) => f.path));
+}
+
+async function exportChat() {
+  if (!chatState.history.length) { showToast(t('chat.sessionEmpty')); return; }
+  syncCurrentSession();
+  const md = [
+    '# ModelLodge ' + (t('chat.title') || 'Chat'),
+    '',
+    t('chat.export') + ': ' + new Date().toLocaleString(),
+    '',
+    ...chatState.history.map((m) =>
+      '## ' + (m.role === 'user' ? (t('chat.user') || '我') : (t('chat.assistant') || 'AI')) + '\n\n' + m.content
+    ),
+  ].join('\n\n');
+  try {
+    const r = await ML.exportChatMd(md, 'ModelLodge-' + new Date().toISOString().slice(0, 10) + '.md');
+    if (r && r.ok) showToast(t('chat.exported') + '：' + r.path);
+  } catch (e) { showToast(t('chat.error') + e.message); }
+}
+
+// Jump into the chat with a ready-to-send prompt. Search examples also turn
+// on the web tool, so the model is allowed to decide when to search.
+function goToChatWithPrompt(prompt, enableWeb) {
+  const nav = document.querySelector('.nav-item[data-view="chat"]');
+  if (nav) nav.click();
+  if (enableWeb) {
+    const toggle = document.getElementById('chat-web-toggle');
+    if (toggle) toggle.checked = true;
+  }
+  if (el.chatInput) {
+    el.chatInput.value = prompt;
+    el.chatInput.focus();
+  }
+}
+
+function applyWelcomePrompt(action) {
+  if (action === 'tools-doc') { goToTools('tool-docs'); return; }
+  if (action === 'tools-pc') {
+    goToChatWithPrompt('列出我桌面上的文件，按修改时间排序', false);
+    return;
+  }
+  if (action === 'tools-search') {
+    goToChatWithPrompt('2026 显卡天梯图，50 系和 40 系怎么选', true);
+    return;
+  }
+  if (action === 'tools-download') { goToTools('tool-software'); return; }
+  if (action === 'import') { importGgufFiles(); return; }
+  if (action === 'download') {
+    const nav = document.querySelector('.nav-item[data-view="download"]');
+    if (nav) nav.click();
+    return;
+  }
+  if (action === 'attach') {
+    const preset = t('wc.attachPrompt');
+    el.chatInput.value = preset;
+    attachContextFiles();
+    el.chatInput.focus();
+    return;
+  }
+  const presets = {
+    summary: ['summary', 'wc.summaryPrompt'],
+    translate: ['translate', 'wc.translatePrompt'],
+    code: ['code', 'wc.codePrompt'],
+  };
+  const hit = presets[action];
+  if (!hit) return;
+  const modeSelect = document.getElementById('chat-mode');
+  if (modeSelect) { modeSelect.value = hit[0]; chatState.mode = hit[0]; }
+  el.chatInput.value = t(hit[1]);
+  el.chatInput.focus();
+}
+
+// Restore imported GGUF files and chat sessions from previous runs.
+// Runs after chatState exists, before the first model selector render.
+(async () => {
+  if (ML.loadImportedModels) {
+    try {
+      const saved = await ML.loadImportedModels();
+      if (Array.isArray(saved) && saved.length) {
+        chatState.importedModels = saved;
+        renderChatModelSelect();
+        renderLocalModelLauncher();
+      }
+    } catch (e) { /* ignore */ }
+  }
+  if (ML.loadChatSessions) {
+    try {
+      const r = await ML.loadChatSessions();
+      if (r && r.ok && Array.isArray(r.sessions) && r.sessions.length) {
+        chatState.sessions = r.sessions;
+        const active = r.sessions.find((s) => s.id === r.activeId) || r.sessions[0];
+        chatState.activeSessionId = active.id;
+        chatState.history = Array.isArray(active.messages) ? active.messages : [];
+      }
+    } catch (e) { /* ignore */ }
+  }
+  if (!chatState.activeSessionId) createSession();
+  renderChatSessions();
+  renderContextBar();
+  if (chatState.history.length) renderHistoryMessages();
+})();
+
+// ---------- 内置引擎 ----------
+
+async function refreshEngineStatus() {
+  try {
+    const r = await ML.engineDetect();
+    if (!r.ok) return;
+    chatState.engineReady = !!r.engine.bundled || !!r.engine.cuda || r.engine.externalCount > 0;
+    chatState.engineRunning = !!r.status.running;
+    chatState.engineVulkan = !!r.engine.vulkan;
+    chatState.engineInfo = r.engine;
+    chatState.runningBackend = r.status.backend || null;
+
+    // Conservative context default by VRAM — only when the user never touched it.
+    if (el.chatCtx && !el.chatCtx.dataset.touched && ML.engineSuggest) {
+      const g = discreteGpu() || state.gpus[0];
+      let freeMB = 0;
+      try {
+        const vu = await ML.vramUsage();
+        if (vu && vu.ok && vu.gpus && vu.gpus[0]) freeMB = vu.gpus[0].freeMB || 0;
+      } catch (_) { /* live reading is optional */ }
+      const s = await ML.engineSuggest(0, g ? g.vramMB : 0, freeMB);
+      if (s && s.ok && s.ctx && [...el.chatCtx.options].some((o) => o.value === String(s.ctx))) {
+        el.chatCtx.value = String(s.ctx);
+      }
+    }
+    // N cards are much faster on CUDA than Vulkan. Tell the truth in the UI.
+    if (el.chatCudaHint) {
+      const nvidia = !!r.engine.nvidia;
+      const usingVulkan = chatState.runningBackend === 'vulkan';
+      const noCuda = nvidia && !(r.engine.cudaCount > 0);
+      const show = nvidia && (usingVulkan || noCuda);
+      el.chatCudaHint.classList.toggle('hidden', !show);
+      if (show) {
+        el.chatCudaHint.textContent = noCuda
+          ? '你的 NVIDIA 显卡未检测到 CUDA 后端，当前只能走 Vulkan —— 通常不如 CUDA 快。'
+          : '当前引擎走 Vulkan；NVIDIA 显卡用 CUDA 通常更快，可在「加速后端」里切换。';
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function discreteGpu() {
+  return (state.gpus || []).find((g) => !g.integrated) || null;
+}
+
+// Live dedicated VRAM meter. Shared-memory spills show up as "free" collapsing.
+let vramTimer = null;
+async function refreshVram() {
+  if (!ML.vramUsage || !el.chatVram) return;
+  try {
+    const r = await ML.vramUsage();
+    const g = r.gpus && r.gpus[0];
+    if (!g) { el.chatVram.classList.add('hidden'); return; }
+    el.chatVram.classList.remove('hidden');
+    const pct = Math.max(0, Math.min(100, Math.round(g.usedMB / g.totalMB * 100)));
+    el.chatVramText.textContent = (g.usedMB / 1024).toFixed(1) + ' / ' + (g.totalMB / 1024).toFixed(1) + ' GB';
+    el.chatVramFill.style.width = pct + '%';
+    const warn = pct >= 85 || g.freeMB < 512;
+    el.chatVramFill.classList.toggle('warn', warn);
+    el.chatVramWarn.classList.toggle('hidden', !warn);
+  } catch (e) { /* ignore */ }
+}
+if (el.chatCtx) el.chatCtx.addEventListener('change', () => { el.chatCtx.dataset.touched = '1'; });
+
+// 列出本机可直接对话的 GGUF 模型
+function collectLocalModels() {
+  const fromLibrary = (state.models || []).filter((m) => /\.gguf$/i.test(m.path || m.name || ''));
+  // Merge library GGUFs with files the user imported from arbitrary paths.
+  // De-duplicate by full path.
+  const seen = new Set();
+  const list = [];
+  for (const m of [...fromLibrary, ...(chatState.importedModels || [])]) {
+    const p = m.path || '';
+    if (!p || seen.has(p) || !/\.gguf$/i.test(p)) continue;
+    seen.add(p);
+    list.push(m);
+  }
+  chatState.localModels = list;
+  return list;
+}
+
+// Import GGUF files from any location on disk — no need to add a folder first.
+async function importGgufFiles() {
+  if (!ML.pickModelFiles) { showToast(t('chat.importFail')); return; }
+  const files = await ML.pickModelFiles();
+  if (!files || !files.length) return;
+  let added = 0;
+  for (const f of files) {
+    if (!chatState.importedModels.some((m) => m.path === f.path)) {
+      chatState.importedModels.push({ path: f.path, name: f.name, size: f.size || 0, type: 'GGUF' });
+      added++;
+    }
+  }
+  if (added && ML.saveImportedModels) {
+    try { await ML.saveImportedModels(chatState.importedModels); } catch (e) { /* ignore */ }
+  }
+  renderChatModelSelect();
+  renderLocalModelLauncher();
+  if (added) showToast(t('chat.imported') + added);
+}
+
+function renderLocalModelLauncher() {
+  const box = document.getElementById('chat-local-models');
+  if (!box) return;
+  box.innerHTML = '';
+  const local = collectLocalModels();
+  if (!local.length) return;   // empty state is covered by chatStatus
+  const title = document.createElement('div');
+  title.className = 'chat-side-title';
+  title.style.marginTop = '8px';
+  title.textContent = t('chat.localTitle');
+  box.appendChild(title);
+  const list = document.createElement('div');
+  list.className = 'chat-local-list';
+  local.slice(0, 12).forEach((m) => {
+    const btn = document.createElement('button');
+    btn.className = 'chat-local-model';
+    btn.title = m.path;
+    btn.textContent = m.name;
+    btn.addEventListener('click', async () => {
+      if (chatState.streaming) { showToast(t('chat.busy')); return; }
+      const ok = await launchEngineWith(m);
+      if (ok) {
+        chatState.backend = null;      // 用内置引擎
+        chatState.model = m.path;
+        el.chatModelSelect.value = m.path;
+        renderChatModelSelect();
+      }
+    });
+    list.appendChild(btn);
+  });
+  box.appendChild(list);
+}
+
+// 启动内置引擎加载指定模型
+// Resolve engine settings for this model: auto -ngl from VRAM, adaptive ctx,
+// and the user's backend preference (auto | cuda | vulkan | cpu).
+async function runtimeOptsFor(model) {
+  const gpu = discreteGpu() || state.gpus[0];
+  let ctx = Number(el.chatCtx.value) || 4096;
+  let gpuLayers = 0;
+  // Use the CURRENT free VRAM, not the card's nominal size: another app may
+  // already be holding several GB, which is exactly what causes lazy OOM.
+  let freeMB = 0;
+  try {
+    const vu = await ML.vramUsage();
+    if (vu && vu.ok && vu.gpus && vu.gpus[0]) freeMB = vu.gpus[0].freeMB || 0;
+  } catch (_) { /* fall back to total VRAM */ }
+  if (ML.engineSuggest) {
+    try {
+      const sc = await ML.engineSuggest(0, gpu ? gpu.vramMB : 0, freeMB);
+      if (sc && sc.ctx && el.chatCtx && !el.chatCtx.dataset.touched
+        && [...el.chatCtx.options].some((o) => o.value === String(sc.ctx))) ctx = sc.ctx;
+    } catch (_) {}
+  }
+  if (el.chatGpu && el.chatGpu.checked) {
+    const choice = el.chatNgl ? el.chatNgl.value : 'auto';
+    if (choice === 'auto') {
+      let s = null;
+      try { s = await ML.engineSuggest(model.size || 0, gpu ? gpu.vramMB : 0, freeMB); } catch (_) {}
+      gpuLayers = s && s.gpuLayers != null ? s.gpuLayers : 50;
+    } else {
+      gpuLayers = Number(choice) || 0;
+    }
+  }
+  return {
+    ctx,
+    gpuLayers,
+    backendPreference: el.chatBackendPref ? el.chatBackendPref.value : 'auto',
+    timeout: 300000,
+  };
+}
+
+// Turn a raw CUDA OOM from llama-server into an actionable Chinese message.
+function friendlyEngineError(err) {
+  const raw = String((err && err.message) || err || '');
+  if (/cudaMalloc failed|out of memory|failed to allocate CUDA|failed to allocate buffer/i.test(raw)) {
+    return t('chat.error') + '显存不足：GPU 加载模型时分配失败。软件已自动逐级降低卸载层数与上下文重试；若仍失败，请把「GPU 卸载层数」调低或切到 CPU / Vulkan，并关闭其他占用显存的程序。';
+  }
+  return t('chat.error') + raw;
+}
+
+async function launchEngineWith(model) {
+  const prevLabel = el.chatStatus.textContent;
+  el.chatStatus.textContent = t('chat.loadingModel');
+  showToast(t('chat.loadingModel'));
+  try {
+    const opts = await runtimeOptsFor(model);
+    const r = await ML.engineStart(model.path, opts);
+    chatState.runningBackend = r.backend || null;
+    if (!r.ok) {
+      // GPU offload can fail on odd drivers — retry on CPU rather than give up.
+      if (el.chatGpu && el.chatGpu.checked) {
+        showToast(t('chat.gpuFallback'));
+        el.chatGpu.checked = false;
+        const cpu = await ML.engineStart(model.path, {
+          ctx: opts.ctx, gpuLayers: 0, backendPreference: 'cpu', timeout: 300000,
+        });
+        if (cpu.ok) {
+          chatState.engineRunning = true;
+          el.chatStatus.textContent = t('chat.engineReady') + (model.name || '');
+          return true;
+        }
+      }
+      const msg = r.error ? friendlyEngineError({ message: r.error }) : t('chat.startFail');
+      el.chatStatus.textContent = msg;
+      showToast(msg);
+      chatState.engineRunning = false;
+      return false;
+    }
+    chatState.engineRunning = true;
+    const tag = r.backend ? ' [' + String(r.backend).toUpperCase() + ' · ' + (r.gpuLayers || 0) + ' 层]' : '';
+    const note = r.message ? ' · ' + r.message : '';
+    el.chatStatus.textContent = t('chat.engineReady') + (model.name || '') + tag + note;
+    showToast(t('chat.engineReady') + (model.name || '') + tag + note);
+    refreshVram();
+    return true;
+  } catch (e) {
+    el.chatStatus.textContent = t('chat.startFail') + e.message;
+    showToast(t('chat.startFail') + e.message);
+    return false;
+  } finally {
+    if (!chatState.engineRunning) el.chatStatus.textContent = prevLabel;
+  }
+}
+
+// ---------- 初始化 ----------
+
+async function initChatView() {
+  await refreshEngineStatus();
+  await refreshVram();
+  if (vramTimer) clearInterval(vramTimer);
+  vramTimer = setInterval(() => {
+    if (state.view === 'chat' && !document.getElementById('chat-view').classList.contains('hidden')) refreshVram();
+  }, 3000);
+  renderChatModelSelect();
+  await refreshChatBackends();
+  renderChatModelSelect();
+  // Tell the user what state the engine is in.
+  if (chatState.engineRunning) {
+    el.chatStatus.textContent = t('chat.engineReady') + (chatState.localModels.find((m) => m.path === chatState.model)?.name || '');
+  } else if (chatState.engineReady) {
+    const n = chatState.localModels.length;
+    el.chatStatus.textContent = n
+      ? t('chat.pickModel') + n
+      : t('chat.noLocal');
+  } else {
+    el.chatStatus.textContent = t('chat.engineMissing');
+  }
+}
+
+// ---------- 外部后端（可选） ----------
+
+async function refreshChatBackends() {
+  let res;
+  try {
+    res = await ML.chatDetect();
+  } catch (e) {
+    return;
+  }
+  if (!res.ok) return;
+  chatState.backends = res.backends || [];
+  const online = chatState.backends.filter((b) => b.online);
+  if (chatState.backend && !chatState.backends.find((b) => b.key === chatState.backend && b.online)) {
+    chatState.backend = null;
+  }
+  if (!chatState.backend && online.length && !chatState.engineReady) {
+    chatState.backend = online[0].key;
+  }
+  renderChatBackends();
+  if (chatState.backend) {
+    const b = chatState.backends.find((x) => x.key === chatState.backend);
+    chatState.models = b ? b.models : [];
+    renderChatModelSelect();
+  }
+}
+
+function renderChatBackends() {
+  const box = el.chatBackends;
+  if (!box) return;
+  box.innerHTML = '';
+  chatState.backends.forEach((b) => {
+    const div = document.createElement('div');
+    // installed-but-offline is a valid state: show it, don't hide it.
+    let state;
+    if (b.online) state = b.models.length + t('chat.modelCount');
+    else if (b.key === 'llamacpp' && chatState.engineReady) state = t('chat.engineReadyShort');
+    else if (b.key === 'lmstudio' && b.appRunning) state = t('chat.appRunning');
+    else if (b.installed) state = t('chat.notRunning');
+    else state = t('chat.notInstalled');
+    div.className = 'chat-backend ' + (b.online ? 'online' : 'offline') + (chatState.backend === b.key ? ' active' : '');
+    div.innerHTML = `
+      <span class="chat-backend-dot"></span>
+      <span class="chat-backend-name">${esc(b.name)}</span>
+      <span class="chat-backend-state">${esc(state)}</span>
+    `;
+    if (b.online) {
+      div.addEventListener('click', () => {
+        chatState.backend = b.key;
+        chatState.models = b.models;
+        renderChatBackends();
+        renderChatModelSelect();
+        el.chatStatus.textContent = t('chat.connected') + b.name + t('chat.modelCount') + b.models.length;
+      });
+    } else if (b.installed && (b.key === 'ollama' || b.key === 'lmstudio') && b.canStartService) {
+      // Installed but the API service is down — offer a one-click start.
+      // For LM Studio this is essential: its GUI chat works while :1234 stays shut.
+      const isLm = b.key === 'lmstudio';
+      const label = isLm ? t('chat.startApi') : t('chat.startService');
+      const btn = document.createElement('button');
+      btn.className = 'link-btn chat-start-service';
+      btn.textContent = label;
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        btn.disabled = true;
+        btn.textContent = t('chat.starting');
+        const r = isLm ? await ML.chatStartLmStudio(b.port) : await ML.chatStartOllama();
+        if (r.ok) {
+          showToast(t('chat.serviceStarted'));
+          await refreshChatBackends();
+        } else {
+          showToast(r.error || t('chat.startFail'));
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      });
+      div.appendChild(btn);
+    }
+    box.appendChild(div);
+  });
+}
+
+// ---------- 模型选择 ----------
+
+function renderChatModelSelect() {
+  const prev = chatState.model;
+  el.chatModelSelect.innerHTML = '';
+
+  // Built-in engine: local GGUF files.
+  const local = collectLocalModels();
+  if (local.length) {
+    const group = document.createElement('optgroup');
+    group.label = t('chat.localTitle');
+    local.forEach((m) => {
+      const opt = document.createElement('option');
+      opt.value = m.path;
+      opt.textContent = m.name + (m.size ? ' · ' + formatSize(m.size) : '');
+      group.appendChild(opt);
+    });
+    el.chatModelSelect.appendChild(group);
+  }
+
+  // External backends: their model lists.
+  chatState.models.forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m.name;
+    const size = m.size ? ' · ' + formatSize(m.size) : '';
+    opt.textContent = m.name + size;
+    el.chatModelSelect.appendChild(opt);
+  });
+
+  if (!el.chatModelSelect.options.length) {
+    const opt = document.createElement('option');
+    opt.textContent = t('chat.noModel');
+    el.chatModelSelect.appendChild(opt);
+    chatState.model = null;
+  } else {
+    if (prev && [...el.chatModelSelect.options].some((o) => o.value === prev)) {
+      el.chatModelSelect.value = prev;
+    }
+    chatState.model = el.chatModelSelect.value;
+  }
+  renderLocalModelLauncher();
+}
+
+// ---------- 对话 ----------
+
+function appendChatMessage(role, content, isError) {
+  const welcome = el.chatMessages.querySelector('.chat-welcome');
+  if (welcome) welcome.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'chat-msg ' + role;
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble' + (isError ? ' chat-error' : '');
+  bubble.textContent = content;
+  wrap.innerHTML = '<div class="chat-avatar">' + (role === 'user' ? t('chat.user') : t('chat.assistant')) + '</div>';
+  wrap.appendChild(bubble);
+  if (role === 'assistant') {
+    const actions = document.createElement('div');
+    actions.className = 'chat-msg-actions';
+    const copy = document.createElement('button');
+    copy.className = 'chat-msg-copy';
+    copy.textContent = t('chat.copy') || '复制';
+    copy.addEventListener('click', async () => {
+      const text = bubble.textContent || '';
+      if (!text) return;
+      try { if (ML.copyText) await ML.copyText(text); } catch (_) { /* ignore */ }
+      copy.textContent = t('chat.copied') || '已复制';
+      setTimeout(() => { copy.textContent = t('chat.copy') || '复制'; }, 1300);
+    });
+    actions.appendChild(copy);
+    wrap.appendChild(actions);
+  }
+  el.chatMessages.appendChild(wrap);
+  if (role === 'assistant' && content) {
+    try { renderAssistantContent(bubble, content); } catch (_) { /* keep raw text */ }
+  }
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+  return bubble;
+}
+
+// Make sure a model is loaded and ready before sending.
+async function ensureModelReady() {
+  if (chatState.backend) return true;          // external backend, already up
+  const sel = el.chatModelSelect.value;
+  if (!sel || sel === t('chat.noModel')) {
+    showToast(t('chat.noBackend'));
+    return false;
+  }
+  // Already running this model?
+  const det = await ML.engineDetect();
+  if (det.ok && det.status.running && det.status.model === sel) {
+    chatState.model = sel;
+    chatState.engineRunning = true;
+    return true;
+  }
+  // Find the local model record so we can launch it.
+  const m = chatState.localModels.find((x) => x.path === sel);
+  if (!m) {
+    showToast(t('chat.noLocalModel'));
+    return false;
+  }
+  chatState.model = sel;
+  return await launchEngineWith(m);
+}
+
+// Render clickable source links beneath an answer that used web search.
+function attachSearchSources(bubble, results) {
+  if (!bubble || !results || !results.length) return;
+  const box = document.createElement('div');
+  box.className = 'chat-sources';
+  const label = document.createElement('div');
+  label.className = 'chat-sources-label';
+  label.textContent = t('chat.sources') || '参考来源';
+  box.appendChild(label);
+  results.forEach((s, i) => {
+    const a = document.createElement('a');
+    a.className = 'chat-source-link';
+    a.href = s.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = '[' + (i + 1) + '] ' + (s.title || s.url);
+    a.title = s.url;
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      if (ML.openExternal) ML.openExternal(s.url);
+    });
+    box.appendChild(a);
+    // Show the retrieved snippet so the user can see the real evidence even
+    // if a small local model fails to summarise it well.
+    if (s.snippet) {
+      const snip = document.createElement('div');
+      snip.className = 'chat-source-snippet';
+      snip.textContent = s.snippet.length > 130 ? s.snippet.slice(0, 130) + '…' : s.snippet;
+      box.appendChild(snip);
+    }
+  });
+  bubble.parentElement.appendChild(box);
+}
+
+// Turn [[ACTION:key|param]] markers in an answer into confirmable action cards.
+// The marker text is stripped from the visible answer; execution only happens
+// when the user clicks the card's button.
+function renderAssistantContent(bubble, raw) {
+  const re = /\[\[ACTION:([a-z_]+)(?:\|([^\]]+))?\]\]/g;
+  const actions = [];
+  let match;
+  while ((match = re.exec(raw || ''))) {
+    actions.push({ key: match[1], param: (match[2] || '').trim() });
+  }
+  const clean = String(raw || '').replace(re, '').trim();
+  bubble.textContent = clean || (actions.length
+    ? '已准备好下面的操作，点「执行」后才会真正运行：'
+    : (t('chat.emptyReply') || ''));
+
+  const wrap = bubble.parentElement;
+  if (!wrap) return actions;
+  wrap.querySelectorAll('.chat-action-card').forEach((x) => x.remove());
+
+  const LABELS = {
+    open_app: '打开应用', open_url: '打开网页', open_path: '打开文件或文件夹',
+    create_file: '创建文本文件', system_info: '查看电脑配置',
+    download_software: '下载软件',
+  };
+  const APPS = {
+    notepad: '记事本', calc: '计算器', explorer: '文件资源管理器',
+    edge: 'Edge 浏览器', chrome: 'Chrome 浏览器', code: 'VS Code',
+    settings: '系统设置', taskmgr: '任务管理器', powershell: 'PowerShell', cmd: '命令提示符',
+  };
+
+  actions.forEach((a) => {
+    const card = document.createElement('div');
+    card.className = 'chat-action-card';
+    const info = document.createElement('div');
+    info.className = 'chat-action-info';
+    const label = document.createElement('span');
+    label.className = 'chat-action-label';
+    label.textContent = LABELS[a.key] || a.key;
+    const detail = document.createElement('span');
+    detail.className = 'chat-action-detail';
+    detail.textContent = a.key === 'open_app' ? (APPS[a.param] || a.param) : a.param;
+    info.appendChild(label);
+    info.appendChild(detail);
+    card.appendChild(info);
+
+    const btn = document.createElement('button');
+    btn.className = 'chat-action-run';
+    btn.textContent = '执行';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      btn.textContent = '执行中…';
+      try {
+        const opts = {};
+        if (a.key === 'create_file') opts.content = clean;
+        const r = await ML.assistantAction(a.key, a.param, opts);
+        if (r && r.ok) {
+          btn.textContent = '已执行';
+          showToast(r.message || '完成');
+        } else if (r && r.canceled) {
+          btn.disabled = false;
+          btn.textContent = '执行';
+        } else {
+          btn.disabled = false;
+          btn.textContent = '重试';
+          showToast(t('chat.error') + ((r && r.error) || t('chat.unknown')));
+        }
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = '重试';
+        showToast(t('chat.error') + e.message);
+      }
+    });
+    card.appendChild(btn);
+    wrap.appendChild(card);
+  });
+  return actions;
+}
+
+// ---- Tool-use loop: search and computer actions are model tools ----------
+// Regression audits can script model replies through this seam; normal use
+// never sets it, so the real engine / external backend path stays untouched.
+let modelTransportOverride = null;
+const MAX_TOOL_ROUNDS = 4;
+const TOOL_LABELS = {
+  open_app: '打开应用', open_url: '打开网页', open_path: '打开文件或文件夹',
+  list_dir: '列出目录', read_file: '读取文件', system_info: '查看电脑配置',
+  clipboard_write: '写入剪贴板', create_file: '创建文本文件',
+  write_file: '写入文件', run_script: '运行脚本', download_software: '下载软件',
+};
+
+function parseToolCalls(raw) {
+  const text = String(raw || '');
+  const re = /\[\[(SEARCH|ACTION|SCRIPT):([\s\S]*?)\]\]/g;
+  const calls = [];
+  let m;
+  while ((m = re.exec(text))) {
+    const kind = m[1].toLowerCase();
+    const body = m[2].trim();
+    if (kind === 'search' && body) {
+      calls.push({ kind, query: body });
+    } else if (kind === 'action') {
+      const i = body.indexOf('|');
+      const key = (i < 0 ? body : body.slice(0, i)).trim();
+      const param = (i < 0 ? '' : body.slice(i + 1)).trim();
+      if (key) calls.push({ kind, key, param });
+    } else if (kind === 'script' && body) {
+      calls.push({ kind, script: body });
+    }
+  }
+  return { calls: calls.slice(0, 2), clean: text.replace(re, '').trim() };
+}
+
+function appendToolLog(wrap, icon, label, detail, resultText, ok) {
+  let log = wrap.querySelector('.chat-tool-log');
+  if (!log) {
+    log = document.createElement('div');
+    log.className = 'chat-tool-log';
+    wrap.appendChild(log);
+  }
+  const row = document.createElement('div');
+  row.className = 'chat-tool-row' + (ok === false ? ' is-error' : '');
+  const head = document.createElement('div');
+  head.className = 'chat-tool-row-head';
+  head.textContent = icon + ' ' + label + (detail ? ' · ' + detail : '');
+  const res = document.createElement('div');
+  res.className = 'chat-tool-row-result';
+  res.textContent = resultText || '执行中…';
+  row.appendChild(head);
+  row.appendChild(res);
+  log.appendChild(row);
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+  return res;
+}
+
+function describeTool(call) {
+  if (call.kind === 'search') return { icon: '🔍', label: '联网搜索', detail: call.query };
+  if (call.kind === 'script') {
+    return { icon: '⌘', label: '运行脚本', detail: call.script.replace(/\s+/g, ' ').slice(0, 70) };
+  }
+  return { icon: '⚙', label: TOOL_LABELS[call.key] || call.key, detail: call.param };
+}
+
+// Privacy guard: refuse to send local file paths / attached-file content out
+// to Bing. Search queries must be generic public keywords only.
+function unsafeSearchQuery(q) {
+  const s = String(q || '');
+  if (/[a-z]:\\|\\\\|file:\/\//i.test(s)) return '搜索词包含本地路径';
+  if (/\.{0,3}(txt|md|csv|docx|xlsx|pdf|gguf)\b/i.test(s) && /\b(user|users|desktop|documents|downloads|桌面|文档|下载)\b/i.test(s)) {
+    return '搜索词包含本地文件名';
+  }
+  // If a query reproduces a long chunk of an attached file, block it.
+  for (const f of (chatState.contextFiles || [])) {
+    const content = String(f.content || '').replace(/\s+/g, ' ').trim();
+    if (content.length >= 24 && content.slice(0, 200).includes(s.replace(/\s+/g, ' ').trim().slice(0, 24))) {
+      return '搜索词疑似复制了附加文件的内容';
+    }
+  }
+  return null;
+}
+
+async function executeToolCall(call, searchEnabled) {
+  if (call.kind === 'search') {
+    if (!searchEnabled || !ML.webSearch) {
+      return { ok: false, result: '联网搜索未开启', history: '' };
+    }
+    const unsafe = unsafeSearchQuery(call.query);
+    if (unsafe) {
+      return { ok: false, result: '出于隐私保护，搜索被拒绝：' + unsafe + '。请改用不包含本地信息的通用关键词。', history: '' };
+    }
+    try {
+      const sr = await ML.webSearch(call.query);
+      if (!sr || !sr.ok || !sr.results || !sr.results.length) {
+        return { ok: false, result: '没有搜到结果', history: '' };
+      }
+      const lines = sr.results.slice(0, 6).map((s, i) =>
+        '[' + (i + 1) + '] ' + (s.title || s.url) + '\n' + (s.snippet || '') + '\n' + s.url
+      );
+      const history = '【工具结果：联网搜索】\n查询：' + call.query + '\n'
+        + lines.join('\n')
+        + '\n请只依据以上真实结果回答，不要编造。结果不足就说没有找到明确答案。';
+      return { ok: true, result: '找到 ' + sr.results.length + ' 条结果', history, results: sr.results };
+    } catch (e) {
+      return { ok: false, result: '搜索失败：' + e.message, history: '' };
+    }
+  }
+  try {
+    const key = call.kind === 'script' ? 'run_script' : call.key;
+    const param = call.kind === 'script' ? '' : call.param;
+    const opts = call.kind === 'script' ? { script: call.script } : {};
+    const r = await ML.assistantAction(key, param, opts);
+    if (!r) return { ok: false, result: '工具无返回', history: '' };
+    if (r.canceled) return { ok: false, result: '你取消了操作', history: '' };
+    const out = String(r.message || r.error || '').trim();
+    const short = out.length > 240 ? out.slice(0, 240) + '…' : out;
+    const history = '【工具结果：' + (TOOL_LABELS[key] || key) + '】\n'
+      + (r.ok ? '成功' : '失败') + '：\n' + out.slice(0, 8000)
+      + '\n请基于这个真实结果继续回答，不要重复执行同一个操作。';
+    return { ok: !!r.ok, result: (r.ok ? '✓ ' : '✗ ') + short, history };
+  } catch (e) {
+    return { ok: false, result: '执行失败：' + e.message, history: '' };
+  }
+}
+
+async function sendChatMessage() {
+  const text = el.chatInput.value.trim();
+  if (!text) return;
+  if (chatState.streaming) { showToast(t('chat.busy')); return; }
+
+  el.chatInput.value = '';
+  appendChatMessage('user', text);
+  chatState.history.push({ role: 'user', content: text });
+  persistSessions();
+
+  const bubble = appendChatMessage('assistant', '');
+  const wrap = bubble.parentElement;
+  const webToggle = document.getElementById('chat-web-toggle');
+  const searchEnabled = !!(webToggle && webToggle.checked);
+
+  chatState.streaming = true;
+  chatState.pending = true;
+  el.chatSend.disabled = true;
+  el.chatStop.classList.remove('hidden');
+
+  const sysParts = [];
+  const workCtx = buildWorkContext(searchEnabled);
+  if (workCtx) sysParts.push(workCtx);
+  let workingHistory = sysParts.length
+    ? [{ role: 'system', content: sysParts.join('\n\n') }].concat(chatState.history)
+    : chatState.history.slice();
+
+  let finalContent = '';
+  let finalError = '';
+  let aborted = false;
+  let interrupted = false;
+  const allSources = [];
+
+  try {
+    const ready = await ensureModelReady();
+    if (!ready) {
+      finalError = t('chat.noBackend');
+    } else {
+      for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+        if (!chatState.pending) { interrupted = true; break; }
+        bubble.textContent = '';
+        const reqId = 'req-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        chatState.reqId = reqId;
+        const opts = {
+          temperature: Number(el.chatTemp.value),
+          ctx: Number(el.chatCtx.value),
+          maxTokens: 2048,
+          reqId,
+        };
+        let r;
+        try {
+          if (modelTransportOverride) {
+            r = await modelTransportOverride(workingHistory, opts);
+          } else if (chatState.backend) {
+            r = await ML.chatSend(chatState.backend, chatState.model, workingHistory, opts);
+          } else {
+            r = await ML.engineChat(workingHistory, opts);
+          }
+        } catch (e) {
+          r = { ok: false, error: e.message };
+        }
+        chatState.reqId = '';
+        if (!r.ok) { finalError = friendlyEngineError({ message: r.error || t('chat.unknown') }); break; }
+        if (r.aborted) { aborted = true; break; }
+
+        const raw = r.content || '';
+        const parsed = parseToolCalls(raw);
+        finalContent = parsed.clean;
+        if (!chatState.pending) { interrupted = true; break; }
+        if (!parsed.calls.length || round === MAX_TOOL_ROUNDS) {
+          if (parsed.calls.length) {
+            appendToolLog(wrap, '⏹', '达到工具调用上限', '', '已停止继续调用工具，下面是当前回答', false);
+          }
+          break;
+        }
+
+        if (parsed.clean) appendToolLog(wrap, '💭', '模型正在调用工具', parsed.clean.slice(0, 140));
+        const toolMessages = [{ role: 'assistant', content: raw }];
+        for (const call of parsed.calls) {
+          const d = describeTool(call);
+          const resNode = appendToolLog(wrap, d.icon, d.label, d.detail, '执行中…');
+          const res = await executeToolCall(call, searchEnabled);
+          resNode.textContent = res.result;
+          resNode.classList.toggle('is-error', !res.ok);
+          if (res.results && res.results.length) allSources.push(...res.results);
+          if (res.history) toolMessages.push({ role: 'user', content: res.history });
+          if (!chatState.pending) { interrupted = true; break; }
+        }
+        workingHistory = workingHistory.concat(toolMessages);
+        if (interrupted) break;
+      }
+    }
+  } catch (e) {
+    finalError = friendlyEngineError(e);
+  }
+
+  chatState.pending = false;
+  chatState.streaming = false;
+  chatState.reqId = '';
+  el.chatSend.disabled = false;
+  el.chatStop.classList.add('hidden');
+
+  const partial = (bubble.textContent || '').trim();
+  if (finalError) {
+    bubble.textContent = finalError;
+    bubble.classList.add('chat-error');
+  } else if (aborted || interrupted) {
+    const keep = partial || finalContent;
+    if (keep) {
+      renderAssistantContent(bubble, keep);
+      chatState.history.push({ role: 'assistant', content: keep });
+    }
+  } else {
+    renderAssistantContent(bubble, finalContent);
+    if (finalContent) chatState.history.push({ role: 'assistant', content: finalContent });
+  }
+  if (allSources.length) attachSearchSources(bubble, allSources);
+  persistSessions();
+  renderChatSessions();
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+}
+
+// 流式增量
+ML.onChatDelta(({ delta }) => {
+  if (!delta) return;
+  // Guard: deltas that arrive after the request already resolved would duplicate
+  // text (the final content already contains them).
+  if (!chatState.streaming) return;
+  const bubbles = el.chatMessages.querySelectorAll('.chat-msg.assistant .chat-bubble');
+  if (!bubbles.length) return;
+  const last = bubbles[bubbles.length - 1];
+  last.textContent += delta;
+  el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+});
+
+el.chatSend.addEventListener('click', sendChatMessage);
+el.chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
+el.chatStop.addEventListener('click', async () => {
+  if (!chatState.pending) return;
+  chatState.pending = false;
+  el.chatStop.classList.add('hidden');
+  // Kill the actual HTTP request so the model stops generating on the GPU.
+  // The pending chat-send/engine-chat call resolves with {aborted:true}.
+  const reqId = chatState.reqId;
+  chatState.reqId = '';
+  if (reqId) {
+    try {
+      if (chatState.backend) await ML.chatAbort(reqId);
+      else await ML.engineAbort(reqId);
+    } catch (e) { /* request may already have finished */ }
+  }
+  showToast(t('chat.stopping'));
+});
+el.chatModelSelect.addEventListener('change', () => {
+  chatState.model = el.chatModelSelect.value;
+  // Switching to an external backend model? keep backend selection consistent.
+  const isLocal = chatState.localModels.some((m) => m.path === chatState.model);
+  if (isLocal) chatState.backend = null;
+  else if (!chatState.backend && chatState.models.some((m) => m.name === chatState.model)) {
+    chatState.backend = chatState.backends.find((b) => b.models.some((m) => m.name === chatState.model))?.key || null;
+  }
+});
+el.chatTemp.addEventListener('input', () => {
+  el.chatTempVal.textContent = Number(el.chatTemp.value).toFixed(1);
+});
+if (el.chatBackendPref) el.chatBackendPref.addEventListener('change', async () => {
+  try { await ML.saveSettings({ backendPreference: el.chatBackendPref.value }); } catch (_) {}
+  await refreshEngineStatus();
+});
+(async () => {
+  try {
+    const s = await ML.loadSettings();
+    if (s && s.backendPreference && el.chatBackendPref) el.chatBackendPref.value = s.backendPreference;
+  } catch (_) {}
+})();
+const importBtn = document.getElementById('btn-import-gguf');
+if (importBtn) importBtn.addEventListener('click', importGgufFiles);
+const attachBtn = document.getElementById('btn-chat-attach');
+if (attachBtn) attachBtn.addEventListener('click', attachContextFiles);
+const exportBtn = document.getElementById('btn-chat-export');
+if (exportBtn) exportBtn.addEventListener('click', exportChat);
+const modeSel = document.getElementById('chat-mode');
+if (modeSel) modeSel.addEventListener('change', () => { chatState.mode = modeSel.value; });
+
+// Delegation keeps welcome-screen buttons alive after the DOM is re-rendered
+// when switching or creating a session.
+if (el.chatMessages) {
+  el.chatMessages.addEventListener('click', (e) => {
+    const hit = e.target.closest('[data-wc-action]');
+    if (hit) applyWelcomePrompt(hit.getAttribute('data-wc-action'));
+  });
+}
+
+document.getElementById('btn-chat-new').addEventListener('click', () => {
+  if (chatState.streaming) { showToast(t('chat.busy')); return; }
+  persistSessions();
+  createSession();
+  chatState.contextFiles = [];
+  renderContextBar();
+  renderChatSessions();
+  renderHistoryMessages();
+  persistSessions(true);
+});
+
+// Drop files straight onto the composer — the fastest way to work with a document.
+const composer = document.querySelector('.chat-composer');
+if (composer) {
+  composer.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    composer.classList.add('drag-over');
+  });
+  composer.addEventListener('dragleave', (e) => {
+    if (!composer.contains(e.relatedTarget)) composer.classList.remove('drag-over');
+  });
+  composer.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    composer.classList.remove('drag-over');
+    const paths = Array.from(e.dataTransfer.files || []).map((f) => f.path).filter((p) => !!p);
+    if (paths.length) await ingestContextPaths(paths);
+  });
+}
+
+// 模型详情面板关闭按钮
+const mdClose = document.getElementById('md-close');
+if (mdClose) mdClose.addEventListener('click', () => {
+  el.modelDetail.classList.add('hidden');
+  el.detailEmpty.classList.remove('hidden');
+  state.hfSelected = null;
+  renderHfResults();
+});
+
+// 下载任务面板折叠
+const btnCollapseQueue = document.getElementById('btn-collapse-queue');
+if (btnCollapseQueue) {
+  btnCollapseQueue.addEventListener('click', () => {
+    const pane = btnCollapseQueue.closest('.download-queue-pane');
+    pane.classList.toggle('collapsed');
+    btnCollapseQueue.textContent = pane.classList.contains('collapsed') ? '▴' : '▾';
+  });
+}
+
+// ============================================================
+// 工作工具箱 —— 文档 / 电脑 / 搜索 / 软件
+// ============================================================
+let toolsInited = false;
+
+function goToTools(anchorId) {
+  const nav = document.querySelector('.nav-item[data-view="tools"]');
+  if (nav) nav.click();
+  if (anchorId) {
+    setTimeout(() => {
+      const target = document.getElementById(anchorId);
+      if (target && target.scrollIntoView) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 150);
+  }
+}
+
+async function initToolsView() {
+  if (!toolsInited) {
+    toolsInited = true;
+    bindToolsEvents();
+  }
+  await renderSoftwareGrid(document.getElementById('software-search')?.value || '');
+}
+
+function bindToolsEvents() {
+  const search = document.getElementById('software-search');
+  if (search) search.addEventListener('input', () => renderSoftwareGrid(search.value));
+
+  const pick = document.getElementById('tool-pick-doc');
+  if (pick) pick.addEventListener('click', attachContextFiles);
+
+  const drop = document.getElementById('doc-drop');
+  if (drop) {
+    drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag-over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('drag-over'));
+    drop.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      drop.classList.remove('drag-over');
+      const paths = Array.from(e.dataTransfer.files || []).map((f) => f.path).filter((p) => !!p);
+      if (paths.length) await previewDocuments(paths);
+    });
+  }
+
+  // Example prompts drop the user straight into the chat with the right tool
+  // enabled. Search and computer control are no longer standalone buttons.
+  document.querySelectorAll('.tool-example').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      goToChatWithPrompt(btn.getAttribute('data-chat-prompt') || '',
+        btn.getAttribute('data-chat-web') === '1');
+    });
+  });
+
+  if (ML.onSoftwareDownloadDone) {
+    ML.onSoftwareDownloadDone((data) => {
+      showToast(data && data.ok
+        ? data.name + ' 下载完成：' + data.path
+        : (data ? data.name + ' 下载失败：' + (data.error || '') : '下载失败'));
+    });
+  }
+}
+
+async function renderSoftwareGrid(query) {
+  const grid = document.getElementById('software-grid');
+  if (!grid || !ML.softwareList) return;
+  const r = await ML.softwareList(query || '');
+  const items = (r && r.items) || [];
+  grid.innerHTML = '';
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'software-empty';
+    empty.textContent = '没有匹配的软件';
+    grid.appendChild(empty);
+    return;
+  }
+  items.forEach((s) => {
+    const card = document.createElement('div');
+    card.className = 'software-card';
+
+    const head = document.createElement('div');
+    head.className = 'software-card-head';
+    const name = document.createElement('strong');
+    name.textContent = s.name;
+    const cat = document.createElement('span');
+    cat.className = 'software-cat';
+    cat.textContent = s.category;
+    head.appendChild(name);
+    head.appendChild(cat);
+
+    const desc = document.createElement('p');
+    desc.textContent = s.desc;
+
+    const actions = document.createElement('div');
+    actions.className = 'software-actions';
+    const dl = document.createElement('button');
+    dl.className = 'software-dl';
+    dl.textContent = '下载';
+    dl.addEventListener('click', async () => {
+      const res = await ML.assistantAction('download_software', s.id);
+      if (res && res.ok) {
+        dl.textContent = '已加入下载';
+        showToast(res.message);
+      } else {
+        showToast(t('chat.error') + ((res && res.error) || t('chat.unknown')));
+      }
+    });
+    const site = document.createElement('button');
+    site.className = 'software-site';
+    site.textContent = '官网';
+    site.addEventListener('click', () => ML.openExternal(s.site));
+    actions.appendChild(dl);
+    actions.appendChild(site);
+
+    card.appendChild(head);
+    card.appendChild(desc);
+    card.appendChild(actions);
+    grid.appendChild(card);
+  });
+}
+
+async function previewDocuments(paths) {
+  const r = await ML.readContextFiles(paths);
+  if (!r || !r.ok) return;
+  const box = document.getElementById('doc-preview');
+  if (!box) return;
+  box.innerHTML = '';
+  box.classList.remove('hidden');
+  let added = 0;
+  r.files.forEach((f) => {
+    if (f.error) { showToast(f.name + '：' + f.error); return; }
+    chatState.contextFiles = chatState.contextFiles.filter((x) => x.path !== f.path);
+    chatState.contextFiles.push(f);
+    added++;
+    const card = document.createElement('div');
+    card.className = 'doc-preview-card';
+    const head = document.createElement('div');
+    head.className = 'doc-preview-head';
+    head.textContent = f.name + ' · ' + String(f.type || 'txt').toUpperCase() + ' · ' + f.content.length + ' 字' + (f.truncated ? '（已截断）' : '');
+    const pre = document.createElement('pre');
+    pre.textContent = f.content.slice(0, 1200) + (f.content.length > 1200 ? '\n…（剩余内容已加入对话上下文）' : '');
+    card.appendChild(head);
+    card.appendChild(pre);
+    box.appendChild(card);
+  });
+  renderContextBar();
+  if (added) showToast(t('chat.filesAdded') + added);
+}
+
+async function runToolSearch() {
+  const input = document.getElementById('tool-search-input');
+  const box = document.getElementById('tool-search-results');
+  const q = (input && input.value || '').trim();
+  if (!q || !box) return;
+  box.textContent = t('chat.searching') || '正在搜索...';
+  try {
+    const r = await ML.webSearch(q);
+    box.innerHTML = '';
+    if (!r || !r.ok || !r.results || !r.results.length) {
+      box.textContent = t('chat.searchFail') || '没有找到结果';
+      return;
+    }
+    r.results.forEach((s, i) => {
+      const row = document.createElement('div');
+      row.className = 'tool-result';
+      const title = document.createElement('a');
+      title.className = 'tool-result-title';
+      title.textContent = '[' + (i + 1) + '] ' + (s.title || s.url);
+      title.setAttribute('href', '#');
+      title.addEventListener('click', (e) => { e.preventDefault(); ML.openExternal(s.url); });
+      const snip = document.createElement('p');
+      snip.textContent = s.snippet || s.url;
+      row.appendChild(title);
+      row.appendChild(snip);
+      box.appendChild(row);
+    });
+  } catch (e) {
+    box.textContent = t('chat.error') + e.message;
+  }
 }
