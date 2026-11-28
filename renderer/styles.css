@@ -1713,3 +1713,22 @@ body { font-size: 14px; line-height: 1.5; }
 .file-progress-eta { margin-top:5px; font-size:10px; color:var(--text-tertiary); }
 :root[data-theme="dark"] .chat-cuda-hint,
 :root[data-theme="dark"] .gated-banner { background: rgba(255,159,10,.08); }
+
+/* ===== POLISH v7.0 — API server + model health check ===== */
+.chat-check-row { display:flex; align-items:center; gap:8px; margin:10px 0 4px; }
+.chat-check-row .secondary-btn { flex:1; }
+.model-check-badge { font-size:10px; padding:2px 7px; border-radius:999px; background:rgba(48,209,88,.14); color:#248a3d; white-space:nowrap; }
+:root[data-theme="dark"] .model-check-badge { color:#30d158; background:rgba(48,209,88,.2); }
+.model-check-report { font-size:11px; line-height:1.5; color:var(--text-secondary); background:var(--bg-secondary, rgba(127,127,127,.08)); border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin:4px 0 8px; white-space:pre-wrap; max-height:180px; overflow-y:auto; }
+.api-row { display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
+.api-row .cmd-hint { margin:0; min-width:80px; }
+.api-port { width:100px !important; padding:6px 8px !important; }
+.api-token { font-size:11px; word-break:break-all; background:rgba(127,127,127,.1); padding:5px 8px; border-radius:6px; flex:1; min-width:180px; user-select:all; }
+.api-btn-row { gap:6px; }
+.api-urls { margin-top:8px; }
+.api-url-line { display:flex; gap:8px; align-items:center; margin-top:4px; }
+.api-url-line code { font-size:11px; color:var(--accent, #0a84ff); word-break:break-all; user-select:all; }
+
+/* ===== POLISH v7.1 — backend restart for stuck CUDA context ===== */
+.backend-restart { margin-left:auto; font-size:11px; padding:1px 7px; opacity:.75; }
+.backend-restart:hover { opacity:1; }
