@@ -1,6 +1,6 @@
 {
   "name": "modellodge",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "ModelLodge 本地模型管理器 — 下载、管理、显存适配与校验",
   "main": "main.js",
   "author": "ModelLodge Team",
@@ -11,7 +11,7 @@
     "dist": "electron-builder --win --x64 --publish never"
   },
   "build": {
-    "appId": "com.workbuddy.modellodge",
+    "appId": "com.modellodge.app",
     "productName": "ModelLodge",
     "copyright": "Copyright © 2026 ModelLodge Team. 保留所有权利。",
     "directories": {
@@ -22,6 +22,12 @@
       "preload.js",
       "gguf.js",
       "downloader.js",
+      "chat.js",
+      "websearch.js",
+      "document.js",
+      "actions.js",
+      "software-catalog.js",
+      "engine.js",
       "vram.js",
       "brands.js",
       "logger.js",
@@ -48,6 +54,13 @@
       {
         "from": "cli",
         "to": "cli",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/llama",
+        "to": "llama",
         "filter": [
           "**/*"
         ]
@@ -80,7 +93,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "ModelLodge",
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": false,
+      "deleteAppDataOnUninstall": true,
       "menuCategory": true,
       "artifactName": "ModelLodge-Setup-${version}.${ext}"
     }
@@ -90,6 +103,10 @@
     "electron-builder": "24.13.3"
   },
   "dependencies": {
-    "https-proxy-agent": "^5.0.1"
+    "adm-zip": "^0.5.16",
+    "https-proxy-agent": "^5.0.1",
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1",
+    "xlsx": "^0.18.5"
   }
 }
