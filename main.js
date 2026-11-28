@@ -1830,10 +1830,15 @@ ipcMain.handle('engine-chat', async (event, messages, opts) => {
   try {
     const st = engine.engineStatus();
     if (!st.running) return { ok: false, error: '引擎未运行' };
+    const callOpts = Object.assign({}, opts || {}, {
+      onReasoning: (think) => {
+        if (!sender.isDestroyed()) sender.send('chat-reasoning', { delta: think });
+      },
+    });
     const result = await engine.streamChat(st.port, messages, (delta) => {
       if (!sender.isDestroyed()) sender.send('chat-delta', { delta });
-    }, opts || {});
-    return { ok: true, content: result.content, aborted: !!result.aborted };
+    }, callOpts);
+    return { ok: true, content: result.content, reasoning: result.reasoning, aborted: !!result.aborted };
   } catch (err) {
     logger.error('engine-chat failed', err);
     return { ok: false, error: err.message || String(err) };
