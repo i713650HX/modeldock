@@ -1,6 +1,6 @@
 {
   "name": "modellodge",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "ModelLodge 本地模型管理器 — 下载、管理、显存适配与校验",
   "main": "main.js",
   "author": "ModelLodge Team",
@@ -95,7 +95,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "ModelLodge",
       "runAfterFinish": true,
-      "deleteAppDataOnUninstall": true,
+      "deleteAppDataOnUninstall": false,
       "menuCategory": true,
       "artifactName": "ModelLodge-Setup-${version}.${ext}"
     }
